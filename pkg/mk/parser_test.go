@@ -22,6 +22,11 @@ func TestParser_ParseExpr(t *testing.T) {
 			want: &IntLitExpr{Value: 10},
 		},
 		{
+			name: "decimal",
+			ctx:  NewCompilationContext("test.mk", `10.25`),
+			want: &DecimalLitExpr{Value: "10.25"},
+		},
+		{
 			name: "bool",
 			ctx:  NewCompilationContext("test.mk", `true`),
 			want: &BoolLitExpr{Value: true},
@@ -34,7 +39,7 @@ func TestParser_ParseExpr(t *testing.T) {
 		{
 			name: "map",
 			ctx:  NewCompilationContext("test.mk", `{"a":"10", "b": 10}`),
-			want: &MapLitExpr{Values: map[string]Expression{"a": &StringLitExpr{Value: "10"}, "b": &IntLitExpr{Value: 10}}},
+			want: &MapLitExpr{Keys: []string{"a", "b"}, Values: map[string]Expression{"a": &StringLitExpr{Value: "10"}, "b": &IntLitExpr{Value: 10}}},
 		},
 		{
 			name: "list",
@@ -44,12 +49,12 @@ func TestParser_ParseExpr(t *testing.T) {
 		{
 			name: "arithmetic",
 			ctx:  NewCompilationContext("test.mk", `10+20*(3-5)`),
-			want: &ArithmeticExpr{Left: &IntLitExpr{Value: 10}, Op: "+", Right: &ArithmeticExpr{Left: &IntLitExpr{Value: 20}, Op: "*", Right: &ParenExpr{Sub: &ArithmeticExpr{Left: &IntLitExpr{Value: 3}, Op: "-", Right: &IntLitExpr{Value: 5}}}}},
+			want: &ArithmeticExpr{Left: &IntLitExpr{Value: 10}, Op: PLUS, Right: &ArithmeticExpr{Left: &IntLitExpr{Value: 20}, Op: STAR, Right: &ParenExpr{Sub: &ArithmeticExpr{Left: &IntLitExpr{Value: 3}, Op: MINUS, Right: &IntLitExpr{Value: 5}}}}},
 		},
 		{
 			name: "comparison",
 			ctx:  NewCompilationContext("test.mk", `a>b && c==d`),
-			want: &ComparisonExpr{Left: &ComparisonExpr{Left: &IdentExpr{Id: "a"}, Op: ">", Right: &IdentExpr{Id: "b"}}, Op: "&&", Right: &ComparisonExpr{Left: &IdentExpr{Id: "c"}, Op: "==", Right: &IdentExpr{Id: "d"}}},
+			want: &ComparisonExpr{Left: &ComparisonExpr{Left: &IdentExpr{Id: "a"}, Op: GT, Right: &IdentExpr{Id: "b"}}, Op: BIT_AND_AND, Right: &ComparisonExpr{Left: &IdentExpr{Id: "c"}, Op: EQ, Right: &IdentExpr{Id: "d"}}},
 		},
 		{
 			name: "dot-string",
@@ -69,12 +74,17 @@ func TestParser_ParseExpr(t *testing.T) {
 		{
 			name: "unary",
 			ctx:  NewCompilationContext("test.mk", `-10`),
-			want: &UnaryExpr{Op: "-", Right: &IntLitExpr{Value: 10}},
+			want: &UnaryExpr{Op: MINUS, Right: &IntLitExpr{Value: 10}},
 		},
 		{
 			name: "fn",
 			ctx:  NewCompilationContext("test.mk", `fn a10(x,y) {}`),
-			want: &FuncExpr{Name: "a", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}}, ArgTypes: []*IdentExpr{nil, nil}, Body: &BlockStmt{Statements: []Statement{}}},
+			want: &FuncExpr{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}}, ArgTypes: []*IdentExpr{nil, nil}, Body: &BlockStmt{Statements: []Statement{}}},
+		},
+		{
+			name: "fn2",
+			ctx:  NewCompilationContext("test.mk", `fn a10(x int,y string,z bool) {}`),
+			want: &FuncExpr{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}, {Id: "z"}}, ArgTypes: []*IdentExpr{{Id: "int"}, {Id: "string"}, {Id: "bool"}}, Body: &BlockStmt{Statements: []Statement{}}},
 		},
 	}
 	for _, tt := range tests {
@@ -85,6 +95,7 @@ func TestParser_ParseExpr(t *testing.T) {
 				for _, diagnostic := range tt.ctx.errors.diagnostics {
 					t.Error(diagnostic.String())
 				}
+				t.Errorf("got %#v, want %#v", got, tt.want)
 			}
 		})
 	}
@@ -135,6 +146,7 @@ func TestParser_ParseStmt(t *testing.T) {
 				for _, diagnostic := range tt.ctx.errors.diagnostics {
 					t.Error(diagnostic.String())
 				}
+				t.Errorf("got %#v, want %#v", got, tt.want)
 			}
 		})
 	}

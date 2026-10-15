@@ -45,6 +45,14 @@ func (c *Codegen) VisitList(n *ListLitExpr) (Node, error) {
 	return n, nil
 }
 
+func (c *Codegen) VisitNull(n *NullLitExpr) (Node, error) {
+	return n, nil
+}
+
+func (c *Codegen) VisitDecimal(n *DecimalLitExpr) (Node, error) {
+	return n, nil
+}
+
 func (c *Codegen) VisitArithmetic(n *ArithmeticExpr) (Node, error) {
 	return n, nil
 }

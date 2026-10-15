@@ -139,7 +139,7 @@ var (
 var InternalTypes = map[string]*TypeDef{
 	"System.Int8":  SysInt8,
 	"System.Int32": SysInt32,
-	"System.Int64": SysInt32,
+	"System.Int64": SysInt64,
 	"System.Bool":  SysBool,
 	"System.Void":  SysVoid,
 

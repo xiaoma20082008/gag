@@ -127,9 +127,22 @@ func (l *Lexer) readToken() Token {
 			kind = BIT_OR
 			lit = "|"
 		}
+	case '^':
+		kind = BIT_XOR
+		lit = "^"
 	case '/':
-		kind = SLASH
-		lit = "/"
+		pc := l.peekChar()
+		switch pc {
+		case '/':
+			l.readComment(false)
+			kind = COMMENT
+		case '*':
+			l.readComment(true)
+			kind = COMMENT
+		default:
+			kind = SLASH
+			lit = "/"
+		}
 	case '!':
 		if l.peekChar() == '=' {
 			l.readChar()
@@ -284,6 +297,34 @@ func (l *Lexer) readString() (string, bool) {
 	// 5. 跳过末尾的"
 	l.readChar()
 
+	return ret, true
+}
+
+func (l *Lexer) readComment(multi bool) (string, bool) {
+	l.readChar() // 跳过 / 或 *
+	p := l.pos
+
+	for l.ch != EOI {
+		if multi && l.ch == '*' && l.peekChar() == '/' {
+			l.readChar()
+			break
+		} else if !multi && l.ch == '\n' {
+			break
+		}
+		l.readChar()
+	}
+
+	if multi && l.ch == EOI {
+		line, col := l.LineMap(p)
+		l.errors.Report(ErrUnterminatedComment, line, col)
+		l.errPos = p
+		return "", false
+	}
+	ret := l.input[p:l.pos]
+
+	if multi { // 读取下一个
+		l.readChar()
+	}
 	return ret, true
 }
 

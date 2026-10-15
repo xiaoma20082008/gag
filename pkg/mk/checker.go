@@ -39,7 +39,7 @@ func (c *Checker) VisitAssign(n *AssignExpr) (Node, error) {
 		c.errors.Report(ErrInvalidLValue, 0, 0, name)
 		panic(&checkingError{fmt.Sprintf(ErrInvalidLValue.Template, name)})
 	}
-
+	n.Value.Accept(c)
 	if ident, ok := n.Name.(*IdentExpr); ok {
 		c.symtab.Define(ident.Id, nil)
 	}
@@ -83,6 +83,14 @@ func (c *Checker) VisitList(n *ListLitExpr) (Node, error) {
 		data = append(data, c.returnVal)
 	}
 	c.returnType = SysList
+	return n, nil
+}
+
+func (c *Checker) VisitNull(n *NullLitExpr) (Node, error) {
+	return n, nil
+}
+
+func (c *Checker) VisitDecimal(n *DecimalLitExpr) (Node, error) {
 	return n, nil
 }
 
@@ -242,7 +250,7 @@ func (c *Checker) resolveType(n Expression) *TypeDef {
 
 func (c *Checker) isLValue(n Expression) bool {
 	switch n.(type) {
-	case *IdentExpr, *DotExpr:
+	case *IdentExpr, *DotExpr, *IndexExpr:
 		return true
 	default:
 		return false

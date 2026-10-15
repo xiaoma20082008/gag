@@ -36,11 +36,9 @@ func (f *formatter) VisitIdent(n *IdentExpr) (Node, error) {
 }
 
 func (f *formatter) VisitAssign(n *AssignExpr) (Node, error) {
-	f.writeIndent()
 	n.Name.Accept(f)
 	f.sb.WriteString(" = ")
 	n.Value.Accept(f)
-	f.sb.WriteString("\n")
 	return n, nil
 }
 
@@ -55,20 +53,24 @@ func (f *formatter) VisitBool(n *BoolLitExpr) (Node, error) {
 }
 
 func (f *formatter) VisitString(n *StringLitExpr) (Node, error) {
+	f.sb.WriteString(`"`)
 	f.sb.WriteString(n.Value)
+	f.sb.WriteString(`"`)
 	return n, nil
 }
 
 func (f *formatter) VisitMap(n *MapLitExpr) (Node, error) {
 	f.sb.WriteString("{")
-	first := true
-	for k, v := range n.Values {
-		if !first {
-			f.sb.WriteString(",")
-			first = true
+	for i, k := range n.Keys {
+		if i > 0 {
+			f.sb.WriteString(", ")
 		}
+		i++
+		f.sb.WriteString(`"`)
 		f.sb.WriteString(k)
-		f.sb.WriteString(":")
+		f.sb.WriteString(`"`)
+		f.sb.WriteString(" : ")
+		v, _ := n.Values[k]
 		v.Accept(f)
 	}
 	f.sb.WriteString("}")
@@ -79,7 +81,7 @@ func (f *formatter) VisitList(n *ListLitExpr) (Node, error) {
 	f.sb.WriteString("[")
 	for i, v := range n.Values {
 		if i > 0 {
-			f.sb.WriteString(",")
+			f.sb.WriteString(", ")
 		}
 		v.Accept(f)
 	}
@@ -87,22 +89,36 @@ func (f *formatter) VisitList(n *ListLitExpr) (Node, error) {
 	return n, nil
 }
 
+func (f *formatter) VisitNull(n *NullLitExpr) (Node, error) {
+	f.sb.WriteString("null")
+	return n, nil
+}
+
+func (f *formatter) VisitDecimal(n *DecimalLitExpr) (Node, error) {
+	f.sb.WriteString(n.Value)
+	return n, nil
+}
+
 func (f *formatter) VisitArithmetic(n *ArithmeticExpr) (Node, error) {
 	n.Left.Accept(f)
-	f.sb.WriteString(n.Op)
+	f.sb.WriteString(" ")
+	f.sb.WriteString(n.Op.String())
+	f.sb.WriteString(" ")
 	n.Right.Accept(f)
 	return n, nil
 }
 
 func (f *formatter) VisitComparison(n *ComparisonExpr) (Node, error) {
 	n.Left.Accept(f)
-	f.sb.WriteString(n.Op)
+	f.sb.WriteString(" ")
+	f.sb.WriteString(n.Op.String())
+	f.sb.WriteString(" ")
 	n.Right.Accept(f)
 	return n, nil
 }
 
 func (f *formatter) VisitUnary(n *UnaryExpr) (Node, error) {
-	f.sb.WriteString(n.Op)
+	f.sb.WriteString(n.Op.String())
 	n.Right.Accept(f)
 	return n, nil
 }
@@ -149,23 +165,29 @@ func (f *formatter) VisitParen(n *ParenExpr) (Node, error) {
 
 func (f *formatter) VisitTernary(n *TernaryExpr) (Node, error) {
 	n.Cond.Accept(f)
-	f.sb.WriteString("?")
+	f.sb.WriteString(" ? ")
 	n.Then.Accept(f)
-	f.sb.WriteString(":")
+	f.sb.WriteString(" : ")
 	n.Else.Accept(f)
 	return n, nil
 }
 
 func (f *formatter) VisitFunc(n *FuncExpr) (Node, error) {
+	f.sb.WriteString("fn ")
 	f.sb.WriteString(n.Name)
 	f.sb.WriteString("(")
-	for i, expr := range n.ArgNames {
+	for i, argName := range n.ArgNames {
+		argType := n.ArgTypes[i]
 		if i > 0 {
 			f.sb.WriteString(", ")
 		}
-		expr.Accept(f)
+		argName.Accept(f)
+		if argType != nil {
+			f.sb.WriteString(" ")
+			argType.Accept(f)
+		}
 	}
-	f.sb.WriteString(")")
+	f.sb.WriteString(") ")
 	n.Body.Accept(f)
 	return n, nil
 }
@@ -174,8 +196,9 @@ func (f *formatter) VisitFunc(n *FuncExpr) (Node, error) {
 
 func (f *formatter) VisitIf(n *IfStmt) (Node, error) {
 	f.writeIndent()
-	f.sb.WriteString("if ")
+	f.sb.WriteString("if (")
 	n.Cond.Accept(f)
+	f.sb.WriteString(") ")
 	n.Then.Accept(f)
 	if n.Else != nil {
 		f.sb.WriteString(" else ")
@@ -212,20 +235,26 @@ func (f *formatter) VisitReturn(n *ReturnStmt) (Node, error) {
 	if n.Value != nil {
 		f.sb.WriteString(" ")
 		n.Value.Accept(f)
-		f.sb.WriteString("\n")
 	}
+	f.sb.WriteString(";")
 	return n, nil
 }
 
 func (f *formatter) VisitBreak(n *BreakStmt) (Node, error) {
 	f.writeIndent()
-	f.sb.WriteString("break\n")
+	f.sb.WriteString("break")
+	if n.Label != nil {
+		f.sb.WriteString(" ")
+		f.sb.WriteString(n.Label.Id)
+	}
+	f.sb.WriteString(";")
 	return n, nil
 }
 
 func (f *formatter) VisitExpr(n *ExprStmt) (Node, error) {
 	f.writeIndent()
 	n.Expr.Accept(f)
+	f.sb.WriteString(";")
 	return n, nil
 }
 

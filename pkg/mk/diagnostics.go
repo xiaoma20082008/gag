@@ -129,6 +129,13 @@ var (
 		Template: "unterminated string literal",
 	}
 
+	// E1002: 多行注释没有闭合，比如 "hello 换行了或者到文件末尾了
+	ErrUnterminatedComment = DiagnosticDescriptor{
+		Code:     "E1003",
+		Kind:     KindLexical,
+		Template: "unterminated multi line comment",
+	}
+
 	// ==========================================
 	// 2. 语法错误 (Syntax Errors: E2000 - E2999)
 	// ==========================================

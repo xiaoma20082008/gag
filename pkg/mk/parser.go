@@ -1,6 +1,7 @@
 package mk
 
 import (
+	"fmt"
 	"strconv"
 )
 
@@ -65,7 +66,7 @@ func NewParser(ctx *CompilationContext) *Parser {
 
 	// 1. =
 	p.infixFns[ASSIGN] = p.parseAssign
-	// 2. + - * / % << >> & |
+	// 2. + - * / % << >> & | ^
 	p.infixFns[PLUS] = p.parseArithmetic
 	p.infixFns[MINUS] = p.parseArithmetic
 	p.infixFns[STAR] = p.parseArithmetic
@@ -75,6 +76,7 @@ func NewParser(ctx *CompilationContext) *Parser {
 	p.infixFns[GTGT] = p.parseArithmetic
 	p.infixFns[BIT_AND] = p.parseArithmetic
 	p.infixFns[BIT_OR] = p.parseArithmetic
+	p.infixFns[BIT_XOR] = p.parseArithmetic
 	// > >= == < <= !=
 	p.infixFns[LT] = p.parseComparison
 	p.infixFns[LE] = p.parseComparison
@@ -86,7 +88,7 @@ func NewParser(ctx *CompilationContext) *Parser {
 	p.infixFns[AND] = p.parseComparison
 	p.infixFns[OR] = p.parseComparison
 	p.infixFns[BIT_AND_AND] = p.parseComparison
-	p.infixFns[BIT_AND_AND] = p.parseComparison
+	p.infixFns[BIT_OR_OR] = p.parseComparison
 
 	// a? b: c
 	p.infixFns[QUESTION] = p.parseTernary
@@ -250,6 +252,9 @@ func (p *Parser) parsePrefix() Expression {
 		expr = p.parseCtx()
 	case FUNC:
 		expr = p.parseFunc()
+	case NULL:
+		p.nextToken()
+		expr = &NullLitExpr{}
 	default:
 		line, col := p.lexer.LineMap(p.token.Offset)
 		p.errors.Report(ErrUnknownPrefixKind, line, col, p.token.Lit)
@@ -294,7 +299,7 @@ func (p *Parser) parseVarDef() (name, typ *IdentExpr) {
 	p.expect(IDENT)
 	name = &IdentExpr{Id: nameTok.Lit}
 	if p.token.Type == IDENT {
-		typ = &IdentExpr{Id: nameTok.Lit}
+		typ = &IdentExpr{Id: p.token.Lit}
 		p.nextToken()
 	}
 	return
@@ -303,8 +308,8 @@ func (p *Parser) parseVarDef() (name, typ *IdentExpr) {
 func (p *Parser) parseUnary() Expression {
 	tok := p.token
 	p.nextToken()
-	expr := p.parseExpr(GetPrecedence(tok.Type))
-	return &UnaryExpr{Op: tok.Lit, Right: expr}
+	expr := p.parseExpr(precPREFIX)
+	return &UnaryExpr{Op: tok.Type, Right: expr}
 }
 
 func (p *Parser) parseList() Expression {
@@ -327,12 +332,14 @@ func (p *Parser) parseMap() Expression {
 	// tok := p.token
 	p.expect(LBRACE)
 	v := map[string]Expression{}
+	keys := []string{}
 	if p.token.Type != RBRACE {
 		key := p.token.Lit
 		p.nextToken()
 		p.expect(COLON)
 		val := p.ParseExpr()
 		v[key] = val
+		keys = append(keys, key)
 
 		for p.token.Type == COMMA {
 			p.nextToken()
@@ -343,11 +350,13 @@ func (p *Parser) parseMap() Expression {
 			p.nextToken()
 			p.expect(COLON)
 			val := p.ParseExpr()
+			keys = append(keys, key)
+
 			v[key] = val
 		}
 	}
 	p.expect(RBRACE)
-	return &MapLitExpr{Values: v}
+	return &MapLitExpr{Keys: keys, Values: v}
 }
 
 func (p *Parser) parseGroup() Expression {
@@ -394,7 +403,7 @@ func (p *Parser) parseTernary(left Expression) Expression {
 
 	thn := p.ParseExpr() // 三元中部表达式通常允许从最低优先级重新解析
 	p.expect(COLON)
-	els := p.parseExpr(prec)
+	els := p.parseExpr(prec - 1)
 
 	return &TernaryExpr{Cond: left, Then: thn, Else: els}
 }
@@ -402,9 +411,13 @@ func (p *Parser) parseTernary(left Expression) Expression {
 func (p *Parser) parseDot(left Expression) Expression {
 	// tok := p.token
 	p.expect(DOT)
-	rhs := p.token.Lit
-	p.nextToken()
-	return &DotExpr{Object: left, Property: rhs}
+	tok := p.token
+	if intLit, ok := left.(*IntLitExpr); ok && tok.Type == INT {
+		p.nextToken()
+		return &DecimalLitExpr{Value: fmt.Sprintf("%d.%s", intLit.Value, tok.Lit)}
+	}
+	p.expect(IDENT)
+	return &DotExpr{Object: left, Property: tok.Lit}
 }
 
 func (p *Parser) parseIndex(left Expression) Expression {
@@ -426,7 +439,7 @@ func (p *Parser) parseArithmetic(left Expression) Expression {
 	prec := GetPrecedence(p.token.Type)
 	p.nextToken()
 	right := p.parseExpr(prec)
-	return &ArithmeticExpr{Op: string(tok.Type), Left: left, Right: right}
+	return &ArithmeticExpr{Op: tok.Type, Left: left, Right: right}
 }
 
 func (p *Parser) parseComparison(left Expression) Expression {
@@ -434,12 +447,18 @@ func (p *Parser) parseComparison(left Expression) Expression {
 	prec := GetPrecedence(p.token.Type)
 	p.nextToken()
 	right := p.parseExpr(prec)
-	return &ComparisonExpr{Op: string(tok.Type), Left: left, Right: right}
+	return &ComparisonExpr{Op: tok.Type, Left: left, Right: right}
 }
 
 func (p *Parser) nextToken() {
 	p.prevToken = p.token
-	p.token = p.lexer.NextToken()
+	for {
+		p.token = p.lexer.NextToken()
+		// 跳过注释
+		if p.token.Type != COMMENT {
+			break
+		}
+	}
 }
 
 func (p *Parser) peekToken() Token {
@@ -522,7 +541,7 @@ func (p *Parser) expect(kind TokenType) {
 	}
 	line, col := p.lexer.LineMap(pos)
 
-	p.errors.Report(ErrExpectedToken, line, col, string(kind), p.token.Lit)
+	p.errors.Report(ErrExpectedToken, line, col, kind.String(), p.token.Lit)
 	panic(&parsingError{"unknown token: " + p.token.Lit})
 }
 

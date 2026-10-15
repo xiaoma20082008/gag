@@ -57,6 +57,14 @@ func (interp *AstInterp) VisitList(n *ListLitExpr) (Node, error) {
 	return n, nil
 }
 
+func (interp *AstInterp) VisitNull(n *NullLitExpr) (Node, error) {
+	return n, nil
+}
+
+func (interp *AstInterp) VisitDecimal(n *DecimalLitExpr) (Node, error) {
+	return n, nil
+}
+
 func (interp *AstInterp) VisitArithmetic(n *ArithmeticExpr) (Node, error) {
 	n.Left.Accept(interp)
 	n.Right.Accept(interp)

@@ -10,6 +10,8 @@ type Visitor interface {
 	VisitString(n *StringLitExpr) (Node, error)
 	VisitMap(n *MapLitExpr) (Node, error)
 	VisitList(n *ListLitExpr) (Node, error)
+	VisitNull(n *NullLitExpr) (Node, error)
+	VisitDecimal(n *DecimalLitExpr) (Node, error)
 	VisitArithmetic(n *ArithmeticExpr) (Node, error)
 	VisitComparison(n *ComparisonExpr) (Node, error)
 	VisitUnary(n *UnaryExpr) (Node, error)
@@ -63,7 +65,12 @@ type BoolLitExpr litExpr[bool]
 
 type StringLitExpr litExpr[string]
 
+type DecimalLitExpr litExpr[string]
+
+type NullLitExpr struct{}
+
 type MapLitExpr struct {
+	Keys   []string // 保证顺序
 	Values map[string]Expression
 }
 
@@ -73,18 +80,18 @@ type ListLitExpr struct {
 
 type ArithmeticExpr struct {
 	Left  Expression
-	Op    string
+	Op    TokenType
 	Right Expression
 }
 
 type ComparisonExpr struct {
 	Left  Expression
-	Op    string
+	Op    TokenType
 	Right Expression
 }
 
 type UnaryExpr struct {
-	Op    string
+	Op    TokenType
 	Right Expression
 }
 
@@ -166,6 +173,8 @@ func (n *BoolLitExpr) sealed()    {}
 func (n *StringLitExpr) sealed()  {}
 func (n *MapLitExpr) sealed()     {}
 func (n *ListLitExpr) sealed()    {}
+func (n *NullLitExpr) sealed()    {}
+func (n *DecimalLitExpr) sealed() {}
 func (n *ArithmeticExpr) sealed() {}
 func (n *ComparisonExpr) sealed() {}
 func (n *AssignExpr) sealed()     {}
@@ -192,6 +201,8 @@ func (n *BoolLitExpr) expr()    {}
 func (n *StringLitExpr) expr()  {}
 func (n *MapLitExpr) expr()     {}
 func (n *ListLitExpr) expr()    {}
+func (n *NullLitExpr) expr()    {}
+func (n *DecimalLitExpr) expr() {}
 func (n *ArithmeticExpr) expr() {}
 func (n *ComparisonExpr) expr() {}
 func (n *UnaryExpr) expr()      {}
@@ -218,6 +229,8 @@ func (n *BoolLitExpr) Accept(v Visitor) (Node, error)    { return v.VisitBool(n)
 func (n *StringLitExpr) Accept(v Visitor) (Node, error)  { return v.VisitString(n) }
 func (n *MapLitExpr) Accept(v Visitor) (Node, error)     { return v.VisitMap(n) }
 func (n *ListLitExpr) Accept(v Visitor) (Node, error)    { return v.VisitList(n) }
+func (n *NullLitExpr) Accept(v Visitor) (Node, error)    { return v.VisitNull(n) }
+func (n *DecimalLitExpr) Accept(v Visitor) (Node, error) { return v.VisitDecimal(n) }
 func (n *ArithmeticExpr) Accept(v Visitor) (Node, error) { return v.VisitArithmetic(n) }
 func (n *ComparisonExpr) Accept(v Visitor) (Node, error) { return v.VisitComparison(n) }
 func (n *UnaryExpr) Accept(v Visitor) (Node, error)      { return v.VisitUnary(n) }
