@@ -1,2 +1,3 @@
 # gag
-An api-gateway written by Go
+
+An AI/API gateway written by Go
