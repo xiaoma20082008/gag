@@ -89,11 +89,15 @@ func (c *Codegen) VisitTernary(n *TernaryExpr) (Node, error) {
 	return n, nil
 }
 
-func (c *Codegen) VisitFunc(n *FuncExpr) (Node, error) {
+func (c *Codegen) VisitFunc(n *FuncStmt) (Node, error) {
 	return n, nil
 }
 
 // ---------- Stmt ----------
+
+func (c *Codegen) VisitLet(n *LetStmt) (Node, error) {
+	return n, nil
+}
 
 func (c *Codegen) VisitIf(n *IfStmt) (Node, error) {
 	return n, nil

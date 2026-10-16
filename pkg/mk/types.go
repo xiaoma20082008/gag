@@ -42,8 +42,11 @@ type ClassMetadata struct {
 }
 
 type FunctionMetadata struct {
+	Name           string
 	ReturnType     *TypeDef
 	ParameterTypes []*TypeDef
+	MinArgs        int // 可选参数
+	MaxArgs        int // -1 = 不限
 }
 
 type GenericMetadata struct {
@@ -122,6 +125,12 @@ type ModuleDef struct {
 	EntryPoint *MethodDef
 }
 
+// ---------------------------------------------------------------------------
+// 内置类型
+//
+// 约定：所有内置类型都是全局唯一指针。
+// ---------------------------------------------------------------------------
+
 var (
 	SysInt8  = &TypeDef{Name: "System.Int8", Kind: TypePrimitive, Size: 1}
 	SysInt32 = &TypeDef{Name: "System.Int32", Kind: TypePrimitive, Size: 4}
@@ -129,10 +138,12 @@ var (
 	SysBool  = &TypeDef{Name: "System.Bool", Kind: TypePrimitive, Size: 1}
 	SysVoid  = &TypeDef{Name: "System.Void", Kind: TypePrimitive, Size: 0}
 
-	SysString   = &TypeDef{Name: "System.String", Kind: TypeClass, Size: 0}
-	SysObject   = &TypeDef{Name: "System.Object", Kind: TypeClass, Size: 0}
-	SysMap      = &TypeDef{Name: "System.Map", Kind: TypeClass, Size: 0}
-	SysList     = &TypeDef{Name: "System.List", Kind: TypeClass, Size: 0}
+	SysDecimal = &TypeDef{Name: "System.Decimal", Kind: TypeClass, Size: 8}
+	SysString  = &TypeDef{Name: "System.String", Kind: TypeClass, Size: 0}
+	SysObject  = &TypeDef{Name: "System.Object", Kind: TypeClass, Size: 0}
+	SysMap     = &TypeDef{Name: "System.Map", Kind: TypeClass, Size: 0}
+	SysList    = &TypeDef{Name: "System.List", Kind: TypeClass, Size: 0}
+
 	SysFunction = &TypeDef{Name: "System.Function", Kind: TypeFunction, Size: 0}
 )
 
@@ -143,18 +154,117 @@ var InternalTypes = map[string]*TypeDef{
 	"System.Bool":  SysBool,
 	"System.Void":  SysVoid,
 
+	"System.Decimal":  SysDecimal,
 	"System.String":   SysString,
 	"System.Object":   SysObject,
 	"System.List":     SysList,
 	"System.Map":      SysMap,
 	"System.Function": SysFunction,
 
-	"byte":   SysInt8,
-	"int":    SysInt32,
-	"long":   SysInt64,
-	"bool":   SysBool,
-	"void":   SysVoid,
+	"byte": SysInt8,
+	"int":  SysInt32,
+	"long": SysInt64,
+	"bool": SysBool,
+	"void": SysVoid,
+
+	"float":   SysDecimal,
+	"decimal": SysDecimal,
+
+	"list": SysList,
+	"map":  SysMap,
+
 	"string": SysString,
+
+	"any":    SysObject,
 	"object": SysObject,
-	"fn":     SysFunction,
+
+	"fn": SysFunction,
+}
+
+func LookupType(name string) (*TypeDef, bool) {
+	t, ok := InternalTypes[name]
+	return t, ok
+}
+
+// ---------------------------------------------------------------------------
+// 类型运算
+// ---------------------------------------------------------------------------
+
+func (t *TypeDef) String() string {
+	if t == nil {
+		return "<null>"
+	}
+	return t.Name
+}
+
+func (t *TypeDef) IsDynamic() bool {
+	return t == SysObject
+}
+
+func (t *TypeDef) IsInteger() bool {
+	switch t {
+	case SysInt8, SysInt32, SysInt64:
+		return true
+	}
+	return false
+}
+
+func (t *TypeDef) IsNumeric() bool {
+	switch t {
+	case SysInt8, SysInt32, SysInt64, SysDecimal:
+		return true
+	}
+	return false
+}
+
+func (t *TypeDef) Signature() *FunctionMetadata {
+	if t != nil && t.Kind == TypeFunction {
+		return t.FunctionMetadata
+	}
+	return nil
+}
+
+func Equal(a, b *TypeDef) bool {
+	if a == b {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.IsNumeric() && b.IsNumeric()
+}
+
+func AssignableTo(src, dst *TypeDef) bool {
+	if src == nil || dst == nil {
+		return true
+	}
+	if src.IsDynamic() || dst.IsDynamic() {
+		return true
+	}
+	if Equal(src, dst) {
+		return true
+	}
+	if src.Kind == TypeFunction && dst.Kind == TypeFunction {
+		return true
+	}
+	return false
+}
+
+func Unify(a, b *TypeDef) *TypeDef {
+	if a == nil {
+		return b
+	}
+	if b == nil {
+		return a
+	}
+	if Equal(a, b) {
+		return a
+	}
+	if a.IsNumeric() && b.IsNumeric() {
+		if a == SysDecimal || b == SysDecimal {
+			return SysDecimal
+		}
+		return SysInt32
+	}
+	return SysObject
 }

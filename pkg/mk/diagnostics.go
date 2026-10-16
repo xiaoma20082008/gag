@@ -129,7 +129,7 @@ var (
 		Template: "unterminated string literal",
 	}
 
-	// E1002: 多行注释没有闭合，比如 "hello 换行了或者到文件末尾了
+	// E1002: 多行注释没有闭合
 	ErrUnterminatedComment = DiagnosticDescriptor{
 		Code:     "E1003",
 		Kind:     KindLexical,
@@ -158,12 +158,11 @@ var (
 		Kind:     KindSyntax,
 		Template: "expression '%s' cannot be used as a standalone statement",
 	}
-
-	// E2004: 赋值号 = 左边不是一个合法的左值（如 5 = a;）
-	ErrInvalidLValue = DiagnosticDescriptor{
+	// E2004: int超过int32最大值
+	ErrIntLiteralOverflow = DiagnosticDescriptor{
 		Code:     "E2004",
 		Kind:     KindSyntax,
-		Template: "cannot assign to '%s'; invalid left-hand side in assignment",
+		Template: "integer literal '%s' is out of range for int32",
 	}
 	// E2005: 遇到了无法解析的前缀表达式
 	ErrNoPrefixParseFunc = DiagnosticDescriptor{
@@ -188,11 +187,6 @@ var (
 		Code:     "E2008",
 		Kind:     KindSyntax,
 		Template: "unknown infix type '%s'",
-	}
-	ErrBreakOutOfLoop = DiagnosticDescriptor{
-		Code:     "E2009",
-		Kind:     KindSyntax,
-		Template: "'break' only can be used in 'while' loop",
 	}
 
 	// ==========================================
@@ -248,17 +242,95 @@ var (
 		Template: "compiler error: name '%s' is not defined in this scope",
 	}
 
-	// E3008: 试图修改常量或不可变变量（类似无 let/const 关键字但有不可变约定的情况）
+	// E3008: 试图修改常量
 	ErrAssignToImmutable = DiagnosticDescriptor{
 		Code:     "E3008",
 		Kind:     KindSemantic,
 		Template: "cannot assign to immutable variable/binding '%s'",
 	}
 
+	// E3009: 代码不可达，比如 return之后的语句
 	ErrUnreachableCode = DiagnosticDescriptor{
 		Code:     "E3009",
 		Kind:     KindSemantic,
 		Template: "cannot reachable the code",
+	}
+
+	// E3010: 类型名解析不出来，例如 let x unknownType = 1;
+	ErrUnknownType = DiagnosticDescriptor{
+		Code:     "E3010",
+		Kind:     KindSemantic,
+		Template: "unknown type '%s'",
+	}
+
+	// E3011: if / while / 三元 的条件不是布尔值
+	ErrConditionNotBool = DiagnosticDescriptor{
+		Code:     "E3011",
+		Kind:     KindSemantic,
+		Template: "condition must be bool, got '%s'",
+	}
+
+	// E3012: 对不可调用的值发起调用，例如 1(); "abc"();
+	ErrNotCallable = DiagnosticDescriptor{
+		Code:     "E3012",
+		Kind:     KindSemantic,
+		Template: "'%s' is not callable",
+	}
+
+	// E3013: 调用了一个未定义的函数
+	ErrUndefinedFunction = DiagnosticDescriptor{
+		Code:     "E3013",
+		Kind:     KindSemantic,
+		Template: "function '%s' is not defined",
+	}
+
+	// E3014: 实参个数与签名不符（编译期）
+	ErrWrongArgCountStatic = DiagnosticDescriptor{
+		Code:     "E3014",
+		Kind:     KindSemantic,
+		Template: "wrong number of arguments in call to '%s': expected %d, got %d",
+	}
+
+	// E3015: 对没有字段的类型做属性访问，例如 (1).foo
+	ErrNoFieldAccess = DiagnosticDescriptor{
+		Code:     "E3015",
+		Kind:     KindSemantic,
+		Template: "type '%s' has no fields",
+	}
+
+	// E3016: 对不可索引的类型做下标访问，例如 (1)[0]
+	ErrNotIndexable = DiagnosticDescriptor{
+		Code:     "E3016",
+		Kind:     KindSemantic,
+		Template: "type '%s' is not indexable",
+	}
+
+	// E3017: map 字面量里出现重复键
+	ErrDuplicateKey = DiagnosticDescriptor{
+		Code:     "E3017",
+		Kind:     KindSemantic,
+		Template: "duplicate key '%s' in map literal",
+	}
+
+	// E3018: 赋值号 = 左边不是一个合法的左值（如 5 = a;）
+	ErrInvalidLValue = DiagnosticDescriptor{
+		Code:     "E3018",
+		Kind:     KindSemantic,
+		Template: "cannot assign to '%s'; invalid left-hand side in assignment",
+	}
+
+	// E3019: break不在循环内
+	ErrBreakOutOfLoop = DiagnosticDescriptor{
+		Code:     "E3019",
+		Kind:     KindSemantic,
+		Template: "'break' outside of a loop",
+	}
+
+	// E3999: 检查器内部错误（recover 兜底，出现即 bug）
+	ErrCheckerInternal = DiagnosticDescriptor{
+		Code:     "E3999",
+		Kind:     KindSemantic,
+		Template: "internal checker error: %v",
 	}
 
 	// ==========================================

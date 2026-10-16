@@ -23,7 +23,7 @@ func NewCompilationContext(file, code string) *CompilationContext {
 	ctx.errors = NewBag(ctx)
 	ctx.lexer = NewLexer(ctx)
 	ctx.parser = NewParser(ctx)
-	ctx.symtab = NewSymbolTable()
+	ctx.symtab = NewRootTable()
 	ctx.checker = NewChecker(ctx)
 	ctx.codegen = NewCodegen(ctx)
 	return ctx

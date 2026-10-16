@@ -1,3 +1,11 @@
 package llm
 
-type OpenaiLLMClient struct{}
+type OpenaiLLMClient struct {
+	cfg *ClientConfig
+}
+
+func NewOpenaiLLMClient(cfg *ClientConfig) *OpenaiLLMClient {
+	return &OpenaiLLMClient{
+		cfg: cfg,
+	}
+}

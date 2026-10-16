@@ -172,7 +172,7 @@ func (f *formatter) VisitTernary(n *TernaryExpr) (Node, error) {
 	return n, nil
 }
 
-func (f *formatter) VisitFunc(n *FuncExpr) (Node, error) {
+func (f *formatter) VisitFunc(n *FuncStmt) (Node, error) {
 	f.sb.WriteString("fn ")
 	f.sb.WriteString(n.Name)
 	f.sb.WriteString("(")
@@ -188,11 +188,31 @@ func (f *formatter) VisitFunc(n *FuncExpr) (Node, error) {
 		}
 	}
 	f.sb.WriteString(") ")
+	if n.RetType != nil {
+		n.RetType.Accept(f)
+		f.sb.WriteString(" ")
+	}
 	n.Body.Accept(f)
 	return n, nil
 }
 
 // ---------- Stmt ----------
+
+func (f *formatter) VisitLet(n *LetStmt) (Node, error) {
+	f.writeIndent()
+	f.sb.WriteString("let ")
+	f.sb.WriteString(n.Name.Id)
+	if n.Type != nil {
+		f.sb.WriteString(" ")
+		n.Type.Accept(f)
+	}
+	if n.Value != nil {
+		f.sb.WriteString(" = ")
+		n.Value.Accept(f)
+	}
+	f.sb.WriteString(";")
+	return n, nil
+}
 
 func (f *formatter) VisitIf(n *IfStmt) (Node, error) {
 	f.writeIndent()

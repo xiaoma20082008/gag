@@ -40,8 +40,8 @@ const (
 	BIT_AND
 	BIT_OR
 
-	BIT_AND_AND
-	BIT_OR_OR
+	LOG_AND
+	LOG_OR
 
 	PERCENT
 	QUESTION
@@ -64,6 +64,7 @@ const (
 	RBRACKET
 
 	// 关键字
+	LET
 	AND
 	OR
 	IF
@@ -132,9 +133,9 @@ func (t TokenType) String() string {
 	case BIT_OR:
 		return "|"
 
-	case BIT_AND_AND:
+	case LOG_AND:
 		return "&&"
-	case BIT_OR_OR:
+	case LOG_OR:
 		return "||"
 
 	case PERCENT:
@@ -168,6 +169,8 @@ func (t TokenType) String() string {
 	case RBRACKET:
 		return "]"
 
+	case LET:
+		return "LET"
 	case AND:
 		return "AND"
 	case OR:
@@ -222,6 +225,7 @@ const (
 var DUMMY = Token{ERR, "", 0, 0, 0}
 
 var keywords = map[string]TokenType{
+	"let":    LET,
 	"and":    AND,
 	"or":     OR,
 	"return": RETURN,
@@ -245,10 +249,10 @@ var precedences = map[TokenType]int{
 	QUESTION: precQUESTION, // ?
 
 	// 逻辑
-	BIT_OR_OR:   precLOG_OR,
-	BIT_AND_AND: precLOG_AND,
-	OR:          precLOG_OR,
-	AND:         precLOG_AND,
+	LOG_OR:  precLOG_OR,
+	LOG_AND: precLOG_AND,
+	OR:      precLOG_OR,
+	AND:     precLOG_AND,
 
 	// 关系比较
 	EQ: precEQUALS,       // ==

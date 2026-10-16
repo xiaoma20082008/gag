@@ -16,7 +16,6 @@ type Lexer struct {
 	saved []Token
 
 	lineStarts []int
-	errPos     int
 	errors     *DiagnosticBag
 }
 
@@ -41,10 +40,6 @@ func (l *Lexer) Lookahead(lookahead int) Token {
 		l.ensure(lookahead)
 		return l.saved[lookahead-1]
 	}
-}
-
-func (l *Lexer) ErrPos() int {
-	return l.errPos
 }
 
 func (l *Lexer) LineMap(pos int) (int, int) {
@@ -78,7 +73,6 @@ func (l *Lexer) Reset(filename, source string) {
 	l.ch = 0
 
 	l.lineStarts = []int{0}
-	l.errPos = -1
 
 	l.readChar()
 }
@@ -112,7 +106,7 @@ func (l *Lexer) readToken() Token {
 	case '&':
 		if l.peekChar() == '&' {
 			l.readChar()
-			kind = BIT_AND_AND
+			kind = LOG_AND
 			lit = "&&"
 		} else {
 			kind = BIT_AND
@@ -121,7 +115,7 @@ func (l *Lexer) readToken() Token {
 	case '|':
 		if l.peekChar() == '|' {
 			l.readChar()
-			kind = BIT_OR_OR
+			kind = LOG_OR
 			lit = "||"
 		} else {
 			kind = BIT_OR
@@ -134,11 +128,23 @@ func (l *Lexer) readToken() Token {
 		pc := l.peekChar()
 		switch pc {
 		case '/':
-			l.readComment(false)
-			kind = COMMENT
+			comment, ok := l.readComment(false)
+			if !ok {
+				lit = ""
+				kind = ERR
+			} else {
+				lit = comment
+				kind = COMMENT
+			}
 		case '*':
-			l.readComment(true)
-			kind = COMMENT
+			comment, ok := l.readComment(true)
+			if !ok {
+				lit = ""
+				kind = ERR
+			} else {
+				lit = comment
+				kind = COMMENT
+			}
 		default:
 			kind = SLASH
 			lit = "/"
@@ -246,7 +252,6 @@ func (l *Lexer) readToken() Token {
 		} else {
 			line, column = l.LineMap(startPos)
 			l.errors.Report(ErrInvalidChar, line, column, string(l.ch))
-			l.errPos = startPos
 			kind = ERR
 			lit = string(l.ch)
 		}
@@ -287,7 +292,6 @@ func (l *Lexer) readString() (string, bool) {
 	if l.ch == EOI {
 		line, col := l.LineMap(p)
 		l.errors.Report(ErrUnterminatedString, line, col)
-		l.errPos = p
 		return "", false
 	}
 
@@ -317,7 +321,6 @@ func (l *Lexer) readComment(multi bool) (string, bool) {
 	if multi && l.ch == EOI {
 		line, col := l.LineMap(p)
 		l.errors.Report(ErrUnterminatedComment, line, col)
-		l.errPos = p
 		return "", false
 	}
 	ret := l.input[p:l.pos]

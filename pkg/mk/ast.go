@@ -21,10 +21,11 @@ type Visitor interface {
 	VisitDot(n *DotExpr) (Node, error)
 	VisitParen(n *ParenExpr) (Node, error)
 	VisitTernary(n *TernaryExpr) (Node, error)
-	VisitFunc(n *FuncExpr) (Node, error)
 
 	// ---------- Stmt ----------
 
+	VisitFunc(n *FuncStmt) (Node, error)
+	VisitLet(n *LetStmt) (Node, error)
 	VisitIf(n *IfStmt) (Node, error)
 	VisitWhile(n *WhileStmt) (Node, error)
 	VisitBlock(n *BlockStmt) (Node, error)
@@ -34,6 +35,11 @@ type Visitor interface {
 	VisitExpr(n *ExprStmt) (Node, error)
 
 	VisitProgram(n *Program) (Node, error)
+}
+
+type Pos struct {
+	Line   int
+	Column int
 }
 
 type Node interface {
@@ -95,13 +101,6 @@ type UnaryExpr struct {
 	Right Expression
 }
 
-type FuncExpr struct {
-	Name     string
-	ArgNames []*IdentExpr
-	ArgTypes []*IdentExpr
-	Body     *BlockStmt
-}
-
 // CtxExpr 表示请求上下文 $
 type CtxExpr struct{}
 
@@ -136,6 +135,12 @@ type AssignExpr struct {
 	Value Expression
 }
 
+type LetStmt struct {
+	Name  *IdentExpr
+	Type  *IdentExpr
+	Value Expression
+}
+
 type IfStmt struct {
 	Cond Expression
 	Then *BlockStmt
@@ -163,6 +168,14 @@ type ExprStmt struct {
 	Expr Expression
 }
 
+type FuncStmt struct {
+	Name     string
+	ArgNames []*IdentExpr
+	ArgTypes []*IdentExpr
+	Body     *BlockStmt
+	RetType  *IdentExpr
+}
+
 type Program struct {
 	Statements []Statement
 }
@@ -185,8 +198,9 @@ func (n *IndexExpr) sealed()      {}
 func (n *DotExpr) sealed()        {}
 func (n *ParenExpr) sealed()      {}
 func (n *TernaryExpr) sealed()    {}
-func (n *FuncExpr) sealed()       {}
+func (n *FuncStmt) sealed()       {}
 
+func (n *LetStmt) sealed()    {}
 func (n *IfStmt) sealed()     {}
 func (n *WhileStmt) sealed()  {}
 func (n *BlockStmt) sealed()  {}
@@ -213,8 +227,9 @@ func (n *DotExpr) expr()        {}
 func (n *ParenExpr) expr()      {}
 func (n *TernaryExpr) expr()    {}
 func (n *AssignExpr) expr()     {}
-func (n *FuncExpr) expr()       {}
 
+func (n *FuncStmt) stmt()   {}
+func (n *LetStmt) stmt()    {}
 func (n *IfStmt) stmt()     {}
 func (n *WhileStmt) stmt()  {}
 func (n *BlockStmt) stmt()  {}
@@ -240,7 +255,8 @@ func (n *IndexExpr) Accept(v Visitor) (Node, error)      { return v.VisitIndex(n
 func (n *DotExpr) Accept(v Visitor) (Node, error)        { return v.VisitDot(n) }
 func (n *ParenExpr) Accept(v Visitor) (Node, error)      { return v.VisitParen(n) }
 func (n *TernaryExpr) Accept(v Visitor) (Node, error)    { return v.VisitTernary(n) }
-func (n *FuncExpr) Accept(v Visitor) (Node, error)       { return v.VisitFunc(n) }
+func (n *FuncStmt) Accept(v Visitor) (Node, error)       { return v.VisitFunc(n) }
+func (n *LetStmt) Accept(v Visitor) (Node, error)        { return v.VisitLet(n) }
 func (n *IfStmt) Accept(v Visitor) (Node, error)         { return v.VisitIf(n) }
 func (n *WhileStmt) Accept(v Visitor) (Node, error)      { return v.VisitWhile(n) }
 func (n *BlockStmt) Accept(v Visitor) (Node, error)      { return v.VisitBlock(n) }

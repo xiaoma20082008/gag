@@ -24,10 +24,12 @@
  * limitations under the License.
 -->
 
-# 架构
+# API/AI Gateway
+
+## 架构设计
 
 - [X](./arch.md)
 
-# 功能
+## 功能列表
 
 - [X](./feature.md)

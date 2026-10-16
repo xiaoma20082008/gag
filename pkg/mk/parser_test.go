@@ -54,7 +54,7 @@ func TestParser_ParseExpr(t *testing.T) {
 		{
 			name: "comparison",
 			ctx:  NewCompilationContext("test.mk", `a>b && c==d`),
-			want: &ComparisonExpr{Left: &ComparisonExpr{Left: &IdentExpr{Id: "a"}, Op: GT, Right: &IdentExpr{Id: "b"}}, Op: BIT_AND_AND, Right: &ComparisonExpr{Left: &IdentExpr{Id: "c"}, Op: EQ, Right: &IdentExpr{Id: "d"}}},
+			want: &ComparisonExpr{Left: &ComparisonExpr{Left: &IdentExpr{Id: "a"}, Op: GT, Right: &IdentExpr{Id: "b"}}, Op: LOG_AND, Right: &ComparisonExpr{Left: &IdentExpr{Id: "c"}, Op: EQ, Right: &IdentExpr{Id: "d"}}},
 		},
 		{
 			name: "dot-string",
@@ -75,16 +75,6 @@ func TestParser_ParseExpr(t *testing.T) {
 			name: "unary",
 			ctx:  NewCompilationContext("test.mk", `-10`),
 			want: &UnaryExpr{Op: MINUS, Right: &IntLitExpr{Value: 10}},
-		},
-		{
-			name: "fn",
-			ctx:  NewCompilationContext("test.mk", `fn a10(x,y) {}`),
-			want: &FuncExpr{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}}, ArgTypes: []*IdentExpr{nil, nil}, Body: &BlockStmt{Statements: []Statement{}}},
-		},
-		{
-			name: "fn2",
-			ctx:  NewCompilationContext("test.mk", `fn a10(x int,y string,z bool) {}`),
-			want: &FuncExpr{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}, {Id: "z"}}, ArgTypes: []*IdentExpr{{Id: "int"}, {Id: "string"}, {Id: "bool"}}, Body: &BlockStmt{Statements: []Statement{}}},
 		},
 	}
 	for _, tt := range tests {
@@ -136,6 +126,16 @@ func TestParser_ParseStmt(t *testing.T) {
 			name: "break-expr",
 			ctx:  NewCompilationContext("test.mk", `break a;`),
 			want: &BreakStmt{Label: &IdentExpr{Id: "a"}},
+		},
+		{
+			name: "fn",
+			ctx:  NewCompilationContext("test.mk", `fn a10(x,y) {}`),
+			want: &FuncStmt{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}}, ArgTypes: []*IdentExpr{nil, nil}, Body: &BlockStmt{Statements: []Statement{}}},
+		},
+		{
+			name: "fn2",
+			ctx:  NewCompilationContext("test.mk", `fn a10(x int,y string,z bool) {}`),
+			want: &FuncStmt{Name: "a10", ArgNames: []*IdentExpr{{Id: "x"}, {Id: "y"}, {Id: "z"}}, ArgTypes: []*IdentExpr{{Id: "int"}, {Id: "string"}, {Id: "bool"}}, Body: &BlockStmt{Statements: []Statement{}}},
 		},
 	}
 	for _, tt := range tests {

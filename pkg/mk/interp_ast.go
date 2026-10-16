@@ -97,7 +97,7 @@ func (interp *AstInterp) VisitCtx(n *CtxExpr) (Node, error) {
 func (interp *AstInterp) VisitCall(n *CallExpr) (Node, error) {
 	switch n.Func.(type) {
 	case *IntLitExpr, *BoolLitExpr, *StringLitExpr:
-		panic(&checkingError{})
+		//panic(&checkingError{})
 	}
 	return n, nil
 }
@@ -118,11 +118,15 @@ func (interp *AstInterp) VisitTernary(n *TernaryExpr) (Node, error) {
 	return n, nil
 }
 
-func (interp *AstInterp) VisitFunc(n *FuncExpr) (Node, error) {
+func (interp *AstInterp) VisitFunc(n *FuncStmt) (Node, error) {
 	return n, nil
 }
 
 // ---------- Stmt ----------
+
+func (interp *AstInterp) VisitLet(n *LetStmt) (Node, error) {
+	return n, nil
+}
 
 func (interp *AstInterp) VisitIf(n *IfStmt) (Node, error) {
 	n.Cond.Accept(interp)
@@ -138,7 +142,7 @@ func (interp *AstInterp) VisitIf(n *IfStmt) (Node, error) {
 
 func (interp *AstInterp) VisitWhile(n *WhileStmt) (Node, error) {
 	n.Cond.Accept(interp)
-	interp.symtab.Enter()
+	interp.symtab.Enter("while")
 	n.Body.Accept(interp)
 	interp.symtab.Leave()
 	return n, nil

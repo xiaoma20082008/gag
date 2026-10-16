@@ -2,6 +2,7 @@ package mk
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 )
 
@@ -62,7 +63,8 @@ func NewParser(ctx *CompilationContext) *Parser {
 
 	p.prefixFns[DOLLAR] = p.parsePrefix
 
-	p.prefixFns[FUNC] = p.parseFunc
+	p.prefixFns[SIZEOF] = p.parsePrefix
+	p.prefixFns[TYPEOF] = p.parsePrefix
 
 	// 1. =
 	p.infixFns[ASSIGN] = p.parseAssign
@@ -87,8 +89,8 @@ func NewParser(ctx *CompilationContext) *Parser {
 	// and or && ||
 	p.infixFns[AND] = p.parseComparison
 	p.infixFns[OR] = p.parseComparison
-	p.infixFns[BIT_AND_AND] = p.parseComparison
-	p.infixFns[BIT_OR_OR] = p.parseComparison
+	p.infixFns[LOG_AND] = p.parseComparison
+	p.infixFns[LOG_OR] = p.parseComparison
 
 	// a? b: c
 	p.infixFns[QUESTION] = p.parseTernary
@@ -117,6 +119,8 @@ func (p *Parser) ParseStmt() Statement {
 		return nil
 	}
 	switch p.token.Type {
+	case LET:
+		return p.parseLet()
 	case IF:
 		return p.parseIf()
 	case RETURN:
@@ -127,6 +131,8 @@ func (p *Parser) ParseStmt() Statement {
 		return p.parseBreak()
 	case LBRACE:
 		return p.parseBlock()
+	case FUNC:
+		return p.parseFunc()
 	default:
 		expr := p.ParseExpr()
 		p.expect(SEMI)
@@ -159,7 +165,7 @@ func (p *Parser) safeParseExpr() (expr Expression) {
 			}
 		}
 	}()
-	return p.parseExpr(0)
+	return p.parseExpr(precLOWEST)
 }
 
 func (p *Parser) safeParseStmt() (stmt Statement) {
@@ -180,12 +186,13 @@ func (p *Parser) safeParseStmt() (stmt Statement) {
 func (p *Parser) crashRecovery() {
 	p.nextToken()
 	for p.token.Type != EOF {
-		if p.token.Type == SEMI {
+		switch p.token.Type {
+		case SEMI:
 			p.nextToken()
 			return
-		}
-		switch p.token.Type {
-		case IF, WHILE, RETURN:
+		case IF, WHILE, RETURN, LET, BREAK, FUNC:
+			return
+		case RBRACE, RPAREN, RBRACKET:
 			return
 		}
 		p.nextToken()
@@ -196,7 +203,7 @@ func (p *Parser) parseExpr(prec int) Expression {
 	var expr Expression
 	prefixFn, ok := p.prefixFns[p.token.Type]
 	if !ok {
-		line, col := p.lexer.LineMap(p.token.Offset)
+		line, col := p.pos()
 		p.errors.Report(ErrNoPrefixParseFunc, line, col, p.token.Lit)
 		panic(&parsingError{"no prefix parse func found for token: " + p.token.Lit})
 	}
@@ -226,7 +233,12 @@ func (p *Parser) parsePrefix() Expression {
 		expr = &BoolLitExpr{Value: v}
 		p.nextToken()
 	case INT:
-		v, _ := strconv.ParseInt(p.token.Lit, 10, 32)
+		v, err := strconv.ParseInt(p.token.Lit, 10, 32)
+		if err != nil {
+			line, col := p.pos()
+			p.errors.Report(ErrIntLiteralOverflow, line, col, p.token.Lit)
+			expr = &IntLitExpr{Value: math.MaxInt32}
+		}
 		expr = &IntLitExpr{Value: int32(v)}
 		p.nextToken()
 	case STRING:
@@ -250,13 +262,11 @@ func (p *Parser) parsePrefix() Expression {
 		expr = p.parseGroup()
 	case DOLLAR:
 		expr = p.parseCtx()
-	case FUNC:
-		expr = p.parseFunc()
 	case NULL:
 		p.nextToken()
 		expr = &NullLitExpr{}
 	default:
-		line, col := p.lexer.LineMap(p.token.Offset)
+		line, col := p.pos()
 		p.errors.Report(ErrUnknownPrefixKind, line, col, p.token.Lit)
 		panic(&parsingError{"unknown token: " + p.token.Lit})
 	}
@@ -268,7 +278,7 @@ func (p *Parser) parseCtx() Expression {
 	return &CtxExpr{}
 }
 
-func (p *Parser) parseFunc() Expression {
+func (p *Parser) parseFunc() Statement {
 	p.expect(FUNC)
 	tok := p.token
 	p.expect(IDENT)
@@ -290,8 +300,13 @@ func (p *Parser) parseFunc() Expression {
 		}
 	}
 	p.expect(RPAREN)
+	var retType *IdentExpr
+	if p.token.Type == IDENT {
+		retType = &IdentExpr{Id: p.token.Lit}
+		p.nextToken()
+	}
 	body := p.parseBlock()
-	return &FuncExpr{Name: name, ArgNames: argNames, ArgTypes: argTypes, Body: body}
+	return &FuncStmt{Name: name, ArgNames: argNames, ArgTypes: argTypes, Body: body, RetType: retType}
 }
 
 func (p *Parser) parseVarDef() (name, typ *IdentExpr) {
@@ -320,6 +335,9 @@ func (p *Parser) parseList() Expression {
 		v = append(v, p.ParseExpr())
 		for p.token.Type == COMMA {
 			p.nextToken()
+			if p.token.Type == RBRACKET { // 支持尾随逗号 [a,b,c,]
+				break
+			}
 			v = append(v, p.ParseExpr())
 		}
 	}
@@ -370,8 +388,8 @@ func (p *Parser) parseGroup() Expression {
 
 func (p *Parser) parseIdent() *IdentExpr {
 	if p.token.Type != IDENT {
-		line, col := p.lexer.LineMap(p.token.Offset)
-		p.errors.Report(ErrExpectedToken, line, col, p.token.Lit)
+		line, col := p.pos()
+		p.errors.Report(ErrExpectedToken, line, col, IDENT.String(), p.token.Lit)
 		panic(&parsingError{"expect an ident, but got: " + p.token.Lit})
 	}
 	e := &IdentExpr{Id: p.token.Lit}
@@ -415,6 +433,9 @@ func (p *Parser) parseDot(left Expression) Expression {
 	if intLit, ok := left.(*IntLitExpr); ok && tok.Type == INT {
 		p.nextToken()
 		return &DecimalLitExpr{Value: fmt.Sprintf("%d.%s", intLit.Value, tok.Lit)}
+	}
+	if !isPropertyName(p.token.Type) {
+		p.reportError(IDENT)
 	}
 	p.expect(IDENT)
 	return &DotExpr{Object: left, Property: tok.Lit}
@@ -463,6 +484,33 @@ func (p *Parser) nextToken() {
 
 func (p *Parser) peekToken() Token {
 	return p.lexer.Lookahead(1)
+}
+
+func (p *Parser) parseLet() *LetStmt {
+	// let xxx;
+	// let xxx type;
+	// let xxx type = xxx;
+	p.expect(LET)
+	name := p.parseIdent()
+	var typ *IdentExpr
+	var val Expression
+
+	if p.token.Type == IDENT {
+		typ = &IdentExpr{Id: p.token.Lit}
+		p.nextToken()
+	}
+
+	switch p.token.Type {
+	case ASSIGN:
+		p.nextToken()
+		val = p.ParseExpr()
+		p.expect(SEMI)
+	case SEMI:
+		p.nextToken()
+	default:
+		p.reportError(p.token.Type)
+	}
+	return &LetStmt{Name: name, Type: typ, Value: val}
 }
 
 func (p *Parser) parseIf() *IfStmt {
@@ -534,7 +582,16 @@ func (p *Parser) expect(kind TokenType) {
 		p.nextToken()
 		return
 	}
+	if kind == SEMI {
+		line, col := p.pos()
+		p.errors.Report(ErrMissingSemi, line, col, p.token.Lit)
+		panic(&parsingError{fmt.Sprintf(ErrMissingSemi.Template, p.token.Lit)})
+	}
 
+	p.reportError(kind)
+}
+
+func (p *Parser) reportError(kind TokenType) {
 	pos := p.token.Offset
 	if p.token.Type == EOF {
 		pos = p.prevToken.Offset + len(p.prevToken.Lit)
@@ -543,6 +600,28 @@ func (p *Parser) expect(kind TokenType) {
 
 	p.errors.Report(ErrExpectedToken, line, col, kind.String(), p.token.Lit)
 	panic(&parsingError{"unknown token: " + p.token.Lit})
+}
+
+func (p *Parser) pos() (int, int) {
+	if p.token.Line > 0 {
+		return p.token.Line, p.token.Column
+	}
+	return p.lexer.LineMap(p.token.Offset)
+}
+
+func isPropertyName(t TokenType) bool {
+	switch t {
+	case LPAREN, RPAREN, LBRACE, RBRACE, LBRACKET, RBRACKET,
+		COMMA, SEMI, COLON, DOT, ASSIGN,
+		PLUS, MINUS, STAR, SLASH, PERCENT, BANG, TILDE, QUESTION,
+		EQ, NE, LT, LE, GT, GE, LTLT, GTGT,
+		BIT_XOR, BIT_AND, BIT_OR, LOG_AND, LOG_OR,
+		ERR, EOF:
+		return false
+	case LET, AND, OR, IF, WHILE, BREAK, RETURN, TRUE, FALSE, ELSE, NULL, TYPEOF, SIZEOF, FUNC:
+		return false
+	}
+	return true
 }
 
 type parsingError struct {

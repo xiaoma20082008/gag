@@ -184,6 +184,7 @@ replace(str, old, new)    // 替换字符串
 split(str, sep)           // 按分隔符分割
 join(arr, sep)            // 用分隔符连接数组
 regex_match(str, pattern) // 正则匹配
+substr(str, left, right)  // 字符串切割
 ```
 
 ### 6.3 请求访问辅助
@@ -236,6 +237,15 @@ log_error(msg)     // 错误日志
 ```javascript
 error(msg)    // 返回错误对象
 throw(msg)    // 抛出异常
+```
+
+### 6.9 其它函数
+
+```javascript
+random()    // 返回随机数
+uuid()      // 返回string
+sizeof(obj) // 返回对象大小
+typeof(obj) // 返回对象类型
 ```
 
 ---
@@ -303,7 +313,7 @@ if (!starts_with(token, "Bearer ")) {
   return error("缺少 Bearer Token");
 }
 
-let payload = jwt_parse(token[7:], "gateway-secret");
+let payload = jwt_parse(substr(token, 7), "gateway-secret");
 
 if (!payload) {
   return error("无效的 Token");
@@ -318,7 +328,7 @@ $.header["x-user-id"] = payload.sub;
 
 ```javascript
 $.header["x-client-ip"] = $.remote.ip;
-$.header["x-trace-id"] = $.header.get("x-trace-id", generate_uuid());
+$.header["x-trace-id"] = $.header.get("x-trace-id", uuid());
 $.header["x-forwarded-host"] = $.url.host;
 ```
 
@@ -462,59 +472,145 @@ mk 语言
   └── 安全沙箱
 ```
 
-### 需要添加的模块
-
-- `internal/runtime/request_context.go` - 请求上下文定义
-- `internal/builtin/gateway.go` - 网关内置函数
-- `internal/interp/request_runtime.go` - 请求运行时
-- `lib/gateway.mk` - 网关标准库
-
 ---
 
-## 14. 完整脚本示例
+## 14. 语法规则
 
-```javascript
-let authHeader = $.header.get("authorization", "");
-if (!starts_with(authHeader, "Bearer ")) {
-  return error("缺少 Token");
-}
+```text
 
-let token = authHeader[7:];
-let claims = jwt_parse(token, "gateway-secret");
+Program 
+  : Statement*
+  ;
 
-if (!claims) {
-  return error("无效的 Token");
-}
+Statement
+  : IfStmt
+  | WhileStmt
+  | LetStmt
+  | BlockStmt
+  | BreakStmt
+  | FuncStmt
+  | ReturnStmt
+  | ExprStmt
+  ;
 
-$.context.user_id = claims.sub;
-$.context.role = claims.role;
-$.header["x-user-id"] = claims.sub;
+IfStmt
+  : IF '(' Expression ')' BlockStmt (ELSE (BlockStmt | IfStmt))?
+  ;
 
-// 访问控制
-if ($.path == "/admin" && $.context.role != "admin") {
-  return error("禁止访问");
-}
+WhileStmt
+  : WHILE '(' Expression ')' BlockStmt
+  ;
 
-// 添加跟踪 ID
-$.header["x-trace-id"] = $.header.get("x-trace-id", generate_uuid());
+LetStmt
+  : LET IdentExpr (IdentExpr)? ('=' Expression)? ';'
+  ;
 
-// 调试日志
-if ($.query.get("debug", "false") == "true") {
-  log("调试模式启用，用户: " + $.context.user_id);
-}
+BlockStmt
+  : '{' Statement* '}'
+  ;
 
-// 返回响应
-return {
-  status: 200,
-  headers: {
-    "x-user-id": $.context.user_id
-  },
-  body: {
-    ok: true,
-    path: $.path
-  }
-}
+BreakStmt
+  : BREAK IdentExpr? ';'
+  ;
+
+FuncStmt
+  : FUNC IdentExpr '(' ParamList ')' IdentExpr? BlockStmt
+  ;
+
+ParamList
+  : (Ident IdentExpr? (',' IdentExpr IdentExpr?)*)? 
+  ;
+
+ReturnStmt
+  : RETURN Expression? ';'
+  ;
+
+
+ExprStmt
+  : Expression? ';'
+  ;
+
+Expression
+  : ValueExpr
+  | IdentExpr
+  | CallExpr
+  | IndexExpr
+  | UnaryExpr
+  | ArithmeticExpr
+  | ComparisonExpr
+  | DotExpr
+  | CtxExpr
+  | ParenExpr
+  | TernaryExpr
+  | AssignExpr
+  ;
+
+ValueExpr
+  : IntExpr
+  | DecimalExpr
+  | BoolExpr
+  | StringExpr
+  | MapExpr
+  | ListExpr
+  | NullExpr
+  ;
+
+CallExpr
+  : Expression '(' Expression? (',' Expression)* ')'
+  ;
+
+IndexExpr
+  : Expression '[' Expression ']'
+  ;
+
+ArithmeticExpr
+  : Expression ('+' | '-' | '*' | '/' | '%' | '<<' | '>>' | '^' | '&' | '|') Expression
+  ;
+
+ComparisonExpr
+  : Expression ('>' | '>=' | '<' | '<=' | '==' | '!=') Expression
+  ;
+
+LogicalExpr
+  : Expression ('&&' | '||' | 'and' | 'or') Expression
+  ;
+
+DotExpr
+  : Expression '.' IdentExpr
+  ;
+
+CtxExpr
+  : '$'
+  ;
+
+ParenExpr
+  : '(' Expression ')'
+  ;
+
+TernaryExpr
+  : Expression '?' Expression ':' Expression
+  ;
+
+AssignExpr
+  : Expression '=' Expression
+  ; 
 ```
+
+### 14.1 类型名拼写
+
+类型名只出现在三处：`let x <T> = ...` 的标注、`fn` 的返回类型、`fn` 的形参类型。
+
+| 类别 | 可用拼写 |
+| --- | --- |
+| 整数 | `byte` / `int` / `long` |
+| 布尔 | `bool` |
+| 无返回值 | `void` |
+| 小数 | `decimal`（`float` 同义） |
+| 字符串 | `string` |
+| 列表 | `list` |
+| 字典 | `map` |
+| 任意对象 | `object`（`any` 同义） |
+| 函数 | `fn` |
 
 ---
 
