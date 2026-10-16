@@ -266,6 +266,7 @@ type FunctionMetadata struct {
 | **R1** | 单一职责 | Checker 只做静态检查：**不求值、不改写 AST、不产生字节码**。任何"计算出的值"都不应写回节点 |
 | **R2** | 结果通道唯一 | 表达式类型**只**通过 `returnType` 传递；每个 Expr visitor **必须**汇报类型。这是本设计最重要的不变式 |
 | **R3** | 陈旧值防护 | `checkExpr(e)` 在 `Accept` **之前**先把 `returnType` 置 `nil`，使"忘记设置"退化为放行，而不是静默复用上一个表达式的类型 |
+| **R4** | 诊断位置 | 一律取自 `Node.Pos()`（`Checker.report(desc, node, args...)` 的首个可变参数位是位置节点，模板参数必须排在它之后） |
 
 ### S —— 作用域与声明
 
@@ -369,7 +370,7 @@ type FunctionMetadata struct {
 | `E1001` | `invalid character '%s'` | Lexer 遇非法字符 | 可达 |
 | `E1002` | `unterminated string literal` | 字符串未闭合 | 可达 |
 | `E1003` | `unterminated multi line comment` | 多行注释未闭合 | 可达 |
-| `E1004` | `unknown escape sequence '\x' in string literal` | 字符串里出现无法识别的转义序列 | 可达 |
+| `E1004` | `unknown escape sequence '\%s' in string literal` | 字符串里出现无法识别的转义序列 | 可达 |
 
 #### 语法错误（E2000–E2999，`KindSyntax`）
 
