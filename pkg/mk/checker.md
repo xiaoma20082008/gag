@@ -369,6 +369,7 @@ type FunctionMetadata struct {
 | `E1001` | `invalid character '%s'` | Lexer 遇非法字符 | 可达 |
 | `E1002` | `unterminated string literal` | 字符串未闭合 | 可达 |
 | `E1003` | `unterminated multi line comment` | 多行注释未闭合 | 可达 |
+| `E1004` | `unknown escape sequence '\x' in string literal` | 字符串里出现无法识别的转义序列 | 可达 |
 
 #### 语法错误（E2000–E2999，`KindSyntax`）
 

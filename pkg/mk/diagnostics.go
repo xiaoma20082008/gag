@@ -129,18 +129,18 @@ var (
 		Template: "unterminated string literal",
 	}
 
-	// E1002: 多行注释没有闭合
+	// E1003: 多行注释没有闭合
 	ErrUnterminatedComment = DiagnosticDescriptor{
 		Code:     "E1003",
 		Kind:     KindLexical,
 		Template: "unterminated multi line comment",
 	}
 
-	// E1003: 转义字符不正确
+	// E1004: 字符串里出现了无法识别的转义序列
 	ErrInvalidEscape = DiagnosticDescriptor{
-		Code:     "E1003",
+		Code:     "E1004",
 		Kind:     KindLexical,
-		Template: "invalid escape character '%s'",
+		Template: "unknown escape sequence '\\%s' in string literal",
 	}
 
 	// ==========================================
