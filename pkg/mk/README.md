@@ -476,7 +476,7 @@ mk 语言
 
 ## 14. 语法规则
 
-```text
+```antlr4
 
 Program 
   : Statement*
@@ -494,7 +494,7 @@ Statement
   ;
 
 IfStmt
-  : IF '(' Expression ')' BlockStmt (ELSE (BlockStmt | IfStmt))?
+  : IF '(' Expression ')' BlockStmt (ELSE BlockStmt)?
   ;
 
 WhileStmt
@@ -568,11 +568,7 @@ ArithmeticExpr
   ;
 
 ComparisonExpr
-  : Expression ('>' | '>=' | '<' | '<=' | '==' | '!=') Expression
-  ;
-
-LogicalExpr
-  : Expression ('&&' | '||' | 'and' | 'or') Expression
+  : Expression ('>' | '>=' | '<' | '<=' | '==' | '!=' | '&&' | '||' | 'and' | 'or') Expression
   ;
 
 DotExpr

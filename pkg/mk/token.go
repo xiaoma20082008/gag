@@ -197,6 +197,8 @@ func (t TokenType) String() string {
 		return "SIZEOF"
 	case FUNC:
 		return "FN"
+	case COMMENT:
+		return "COMMENT"
 	default:
 		return ""
 	}

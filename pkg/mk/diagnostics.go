@@ -136,6 +136,13 @@ var (
 		Template: "unterminated multi line comment",
 	}
 
+	// E1003: 转义字符不正确
+	ErrInvalidEscape = DiagnosticDescriptor{
+		Code:     "E1003",
+		Kind:     KindLexical,
+		Template: "invalid escape character '%s'",
+	}
+
 	// ==========================================
 	// 2. 语法错误 (Syntax Errors: E2000 - E2999)
 	// ==========================================
@@ -158,11 +165,11 @@ var (
 		Kind:     KindSyntax,
 		Template: "expression '%s' cannot be used as a standalone statement",
 	}
-	// E2004: int超过int32最大值
+	// E2004: int超过int32范围
 	ErrIntLiteralOverflow = DiagnosticDescriptor{
 		Code:     "E2004",
 		Kind:     KindSyntax,
-		Template: "integer literal '%s' is out of range for int32",
+		Template: "integer literal '%s' is out of range for int32 (-2147483648 ~ 2147483647)",
 	}
 	// E2005: 遇到了无法解析的前缀表达式
 	ErrNoPrefixParseFunc = DiagnosticDescriptor{

@@ -109,35 +109,7 @@ func (p *Parser) ParseExpr() Expression {
 }
 
 func (p *Parser) ParseStmt() Statement {
-	if p.token.Type == EOF {
-		return nil
-	}
-	if p.token.Type == SEMI {
-		p.nextToken()
-	}
-	if p.token.Type == EOF {
-		return nil
-	}
-	switch p.token.Type {
-	case LET:
-		return p.parseLet()
-	case IF:
-		return p.parseIf()
-	case RETURN:
-		return p.parseReturn()
-	case WHILE:
-		return p.parseWhile()
-	case BREAK:
-		return p.parseBreak()
-	case LBRACE:
-		return p.parseBlock()
-	case FUNC:
-		return p.parseFunc()
-	default:
-		expr := p.ParseExpr()
-		p.expect(SEMI)
-		return &ExprStmt{Expr: expr}
-	}
+	return p.safeParseStmt()
 }
 
 func (p *Parser) ParseCode() *Program {
@@ -180,7 +152,7 @@ func (p *Parser) safeParseStmt() (stmt Statement) {
 			}
 		}
 	}()
-	return p.ParseStmt()
+	return p.parseStmt()
 }
 
 func (p *Parser) crashRecovery() {
@@ -196,6 +168,38 @@ func (p *Parser) crashRecovery() {
 			return
 		}
 		p.nextToken()
+	}
+}
+
+func (p *Parser) parseStmt() Statement {
+	if p.token.Type == EOF {
+		return nil
+	}
+	if p.token.Type == SEMI {
+		p.nextToken()
+	}
+	if p.token.Type == EOF {
+		return nil
+	}
+	switch p.token.Type {
+	case LET:
+		return p.parseLet()
+	case IF:
+		return p.parseIf()
+	case RETURN:
+		return p.parseReturn()
+	case WHILE:
+		return p.parseWhile()
+	case BREAK:
+		return p.parseBreak()
+	case LBRACE:
+		return p.parseBlock()
+	case FUNC:
+		return p.parseFunc()
+	default:
+		expr := p.ParseExpr()
+		p.expect(SEMI)
+		return &ExprStmt{pos: expr.Pos(), Expr: expr}
 	}
 }
 
@@ -229,20 +233,12 @@ func (p *Parser) parsePrefix() Expression {
 		expr = p.parseIdent()
 	// bool,int,string,list,map
 	case TRUE, FALSE:
-		v, _ := strconv.ParseBool(p.token.Lit)
-		expr = &BoolLitExpr{Value: v}
-		p.nextToken()
+		expr = p.parseBool()
 	case INT:
-		v, err := strconv.ParseInt(p.token.Lit, 10, 32)
-		if err != nil {
-			line, col := p.pos()
-			p.errors.Report(ErrIntLiteralOverflow, line, col, p.token.Lit)
-			expr = &IntLitExpr{Value: math.MaxInt32}
-		}
-		expr = &IntLitExpr{Value: int32(v)}
-		p.nextToken()
+		expr = p.parseInt()
 	case STRING:
-		expr = &StringLitExpr{Value: p.token.Lit}
+		tok := p.token
+		expr = &StringLitExpr{pos: newPos(tok.Line, tok.Column), Value: p.token.Lit}
 		p.nextToken()
 	case LBRACKET:
 		expr = p.parseList()
@@ -253,18 +249,16 @@ func (p *Parser) parsePrefix() Expression {
 	case TYPEOF, SIZEOF:
 		tok := p.token
 		p.nextToken()
-		ce := &CallExpr{Func: &IdentExpr{Id: tok.Lit}}
-		p.expect(LPAREN)
-		ce.Args = []Expression{p.ParseExpr()}
-		p.expect(RPAREN)
-		expr = ce
+		fn := &IdentExpr{pos: newPos(tok.Line, tok.Column), Id: tok.Lit}
+		expr = p.parseCall(fn)
 	case LPAREN:
 		expr = p.parseGroup()
 	case DOLLAR:
 		expr = p.parseCtx()
 	case NULL:
+		tok := p.token
 		p.nextToken()
-		expr = &NullLitExpr{}
+		expr = &NullLitExpr{pos: newPos(tok.Line, tok.Column)}
 	default:
 		line, col := p.pos()
 		p.errors.Report(ErrUnknownPrefixKind, line, col, p.token.Lit)
@@ -274,15 +268,17 @@ func (p *Parser) parsePrefix() Expression {
 }
 
 func (p *Parser) parseCtx() Expression {
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(DOLLAR)
-	return &CtxExpr{}
+	return &CtxExpr{pos: pos}
 }
 
 func (p *Parser) parseFunc() Statement {
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(FUNC)
 	tok := p.token
 	p.expect(IDENT)
-	name := tok.Lit
+	name := &IdentExpr{pos: newPos(tok.Line, tok.Column), Id: tok.Lit}
 	p.expect(LPAREN)
 	argNames := []*IdentExpr{}
 	argTypes := []*IdentExpr{}
@@ -302,33 +298,78 @@ func (p *Parser) parseFunc() Statement {
 	p.expect(RPAREN)
 	var retType *IdentExpr
 	if p.token.Type == IDENT {
-		retType = &IdentExpr{Id: p.token.Lit}
+		retType = &IdentExpr{pos: newPos(p.token.Line, p.token.Column), Id: p.token.Lit}
 		p.nextToken()
 	}
 	body := p.parseBlock()
-	return &FuncStmt{Name: name, ArgNames: argNames, ArgTypes: argTypes, Body: body, RetType: retType}
+	return &FuncStmt{pos: pos, Name: name, ArgNames: argNames, ArgTypes: argTypes, Body: body, RetType: retType}
 }
 
 func (p *Parser) parseVarDef() (name, typ *IdentExpr) {
 	nameTok := p.token
 	p.expect(IDENT)
-	name = &IdentExpr{Id: nameTok.Lit}
+	name = &IdentExpr{pos: newPos(nameTok.Line, nameTok.Column), Id: nameTok.Lit}
 	if p.token.Type == IDENT {
-		typ = &IdentExpr{Id: p.token.Lit}
+		typ = &IdentExpr{pos: newPos(p.token.Line, p.token.Column), Id: p.token.Lit}
 		p.nextToken()
 	}
 	return
 }
 
+func (p *Parser) parseBool() Expression {
+	tok := p.token
+	v, _ := strconv.ParseBool(p.token.Lit)
+	expr := &BoolLitExpr{pos: newPos(tok.Line, tok.Column), Value: v}
+	p.nextToken()
+	return expr
+}
+
+func (p *Parser) parseInt() Expression {
+	var expr Expression
+	tok := p.token
+	v64, err := strconv.ParseInt(p.token.Lit, 10, 64)
+	if err != nil {
+		line, col := p.pos()
+		p.errors.Report(ErrIntLiteralOverflow, line, col, p.token.Lit)
+		expr = &IntLitExpr{pos: newPos(tok.Line, tok.Column), Value: math.MaxInt32}
+	} else {
+		if v64 > math.MaxInt32 {
+			p.errors.Report(ErrIntLiteralOverflow, tok.Line, tok.Column, p.token.Lit)
+			v64 = math.MaxInt32
+		}
+		expr = &IntLitExpr{pos: newPos(tok.Line, tok.Column), Value: int32(v64)}
+	}
+	p.nextToken()
+	return expr
+}
+
 func (p *Parser) parseUnary() Expression {
 	tok := p.token
 	p.nextToken()
+	if tok.Type == MINUS && p.token.Type == INT { // 负数
+		v := "-" + p.token.Lit
+		v64, err := strconv.ParseInt(v, 10, 64)
+		var expr *IntLitExpr
+		if err != nil {
+			p.errors.Report(ErrIntLiteralOverflow, tok.Line, tok.Column, v)
+			expr = &IntLitExpr{pos: newPos(tok.Line, tok.Column), Value: math.MinInt32}
+		} else {
+			if v64 < math.MinInt32 {
+				p.errors.Report(ErrIntLiteralOverflow, tok.Line, tok.Column, v)
+				v64 = math.MinInt32
+			}
+			expr = &IntLitExpr{pos: newPos(tok.Line, tok.Column), Value: int32(v64)}
+		}
+		p.nextToken()
+		return expr
+	}
 	expr := p.parseExpr(precPREFIX)
-	return &UnaryExpr{Op: tok.Type, Right: expr}
+	return &UnaryExpr{pos: newPos(tok.Line, tok.Column), Op: tok.Type, Right: expr}
 }
 
 func (p *Parser) parseList() Expression {
 	// [v1,v2,v3]
+	tok := p.token
 	p.expect(LBRACKET)
 	v := []Expression{}
 	if p.token.Type != RBRACKET {
@@ -342,12 +383,12 @@ func (p *Parser) parseList() Expression {
 		}
 	}
 	p.expect(RBRACKET)
-	return &ListLitExpr{Values: v}
+	return &ListLitExpr{pos: newPos(tok.Line, tok.Column), Values: v}
 }
 
 func (p *Parser) parseMap() Expression {
 	// {k:v,k:v,}
-	// tok := p.token
+	tok := p.token
 	p.expect(LBRACE)
 	v := map[string]Expression{}
 	keys := []string{}
@@ -374,16 +415,16 @@ func (p *Parser) parseMap() Expression {
 		}
 	}
 	p.expect(RBRACE)
-	return &MapLitExpr{Keys: keys, Values: v}
+	return &MapLitExpr{pos: newPos(tok.Line, tok.Column), Keys: keys, Values: v}
 }
 
 func (p *Parser) parseGroup() Expression {
 	// Paren: ( x )
-	// tok := p.token
+	tok := p.token
 	p.expect(LPAREN)
 	expr := p.ParseExpr()
 	p.expect(RPAREN)
-	return &ParenExpr{Sub: expr}
+	return &ParenExpr{pos: newPos(tok.Line, tok.Column), Sub: expr}
 }
 
 func (p *Parser) parseIdent() *IdentExpr {
@@ -392,13 +433,15 @@ func (p *Parser) parseIdent() *IdentExpr {
 		p.errors.Report(ErrExpectedToken, line, col, IDENT.String(), p.token.Lit)
 		panic(&parsingError{"expect an ident, but got: " + p.token.Lit})
 	}
-	e := &IdentExpr{Id: p.token.Lit}
+	tok := p.token
+	e := &IdentExpr{pos: newPos(tok.Line, tok.Column), Id: p.token.Lit}
 	p.nextToken()
 	return e
 }
 
 func (p *Parser) parseCall(left Expression) Expression {
-	expr := &CallExpr{Func: left}
+	tok := p.token
+	expr := &CallExpr{pos: newPos(tok.Line, tok.Column), Func: left}
 	p.expect(LPAREN)
 
 	args := []Expression{}
@@ -423,36 +466,39 @@ func (p *Parser) parseTernary(left Expression) Expression {
 	p.expect(COLON)
 	els := p.parseExpr(prec - 1)
 
-	return &TernaryExpr{Cond: left, Then: thn, Else: els}
+	return &TernaryExpr{pos: newPos(tok.Line, tok.Column), Cond: left, Then: thn, Else: els}
 }
 
 func (p *Parser) parseDot(left Expression) Expression {
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(DOT)
 	tok := p.token
 	if intLit, ok := left.(*IntLitExpr); ok && tok.Type == INT {
 		p.nextToken()
-		return &DecimalLitExpr{Value: fmt.Sprintf("%d.%s", intLit.Value, tok.Lit)}
+		return &DecimalLitExpr{pos: intLit.pos, Value: fmt.Sprintf("%d.%s", intLit.Value, tok.Lit)}
 	}
 	if !isPropertyName(p.token.Type) {
 		p.reportError(IDENT)
 	}
 	p.expect(IDENT)
-	return &DotExpr{Object: left, Property: tok.Lit}
+	return &DotExpr{pos: pos, Object: left, Property: &IdentExpr{pos: newPos(tok.Line, tok.Column), Id: tok.Lit}}
 }
 
 func (p *Parser) parseIndex(left Expression) Expression {
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(LBRACKET)
 	idx := p.ParseExpr()
 	p.expect(RBRACKET)
-	return &IndexExpr{Node: left, Index: idx}
+	return &IndexExpr{pos: pos, Node: left, Index: idx}
 }
 
 func (p *Parser) parseAssign(left Expression) Expression {
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(ASSIGN)
 	val := p.ParseExpr()
-	return &AssignExpr{Name: left, Value: val}
+	return &AssignExpr{pos: pos, Name: left, Value: val}
 }
 
 func (p *Parser) parseArithmetic(left Expression) Expression {
@@ -490,13 +536,14 @@ func (p *Parser) parseLet() *LetStmt {
 	// let xxx;
 	// let xxx type;
 	// let xxx type = xxx;
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(LET)
 	name := p.parseIdent()
 	var typ *IdentExpr
 	var val Expression
 
 	if p.token.Type == IDENT {
-		typ = &IdentExpr{Id: p.token.Lit}
+		typ = &IdentExpr{pos: newPos(p.token.Line, p.token.Column), Id: p.token.Lit}
 		p.nextToken()
 	}
 
@@ -510,18 +557,19 @@ func (p *Parser) parseLet() *LetStmt {
 	default:
 		p.reportError(p.token.Type)
 	}
-	return &LetStmt{Name: name, Type: typ, Value: val}
+	return &LetStmt{pos: pos, Name: name, Type: typ, Value: val}
 }
 
 func (p *Parser) parseIf() *IfStmt {
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(IF)
 	p.expect(LPAREN)
 	cond := p.ParseExpr()
 	p.expect(RPAREN)
 	then := p.parseBlock()
 
-	s := &IfStmt{Cond: cond, Then: then}
+	s := &IfStmt{pos: pos, Cond: cond, Then: then}
 	if p.token.Type == ELSE {
 		p.nextToken()
 		s.Else = p.parseBlock()
@@ -531,27 +579,30 @@ func (p *Parser) parseIf() *IfStmt {
 
 func (p *Parser) parseWhile() *WhileStmt {
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(WHILE)
 	p.expect(LPAREN)
 	cond := p.ParseExpr()
 	p.expect(RPAREN)
 	body := p.parseBlock()
-	return &WhileStmt{Cond: cond, Body: body}
+	return &WhileStmt{pos: pos, Cond: cond, Body: body}
 }
 
 func (p *Parser) parseBreak() *BreakStmt {
+	pos := newPos(p.token.Line, p.token.Column)
 	p.nextToken()
 	var label *IdentExpr
 	if p.token.Type == IDENT {
-		label = &IdentExpr{Id: p.token.Lit}
+		label = &IdentExpr{pos: newPos(p.token.Line, p.token.Column), Id: p.token.Lit}
 		p.nextToken()
 	}
 	p.expect(SEMI)
-	return &BreakStmt{Label: label}
+	return &BreakStmt{pos: pos, Label: label}
 }
 
 func (p *Parser) parseBlock() *BlockStmt {
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(LBRACE)
 	stmts := []Statement{}
 	for p.token.Type != RBRACE && p.token.Type != EOF {
@@ -561,20 +612,21 @@ func (p *Parser) parseBlock() *BlockStmt {
 		}
 	}
 	p.expect(RBRACE)
-	return &BlockStmt{Statements: stmts}
+	return &BlockStmt{pos: pos, Statements: stmts}
 }
 
 func (p *Parser) parseReturn() *ReturnStmt {
 	// return;
 	// return xxx;
 	// tok := p.token
+	pos := newPos(p.token.Line, p.token.Column)
 	p.expect(RETURN)
 	var expr Expression
 	if p.token.Type != SEMI {
 		expr = p.ParseExpr()
 	}
 	p.expect(SEMI)
-	return &ReturnStmt{Value: expr}
+	return &ReturnStmt{pos: pos, Value: expr}
 }
 
 func (p *Parser) expect(kind TokenType) {

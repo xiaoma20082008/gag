@@ -41,8 +41,6 @@ Checker 是 AST 之后、代码生成之前的**独立一趟**。
 
 ### 1.4 错误处理策略：三条不变式
 
-这是本设计最重要的部分，全部围绕"**不崩 + 不误报**"：
-
 **不变式 1 —— 结果通道先清空**
 
 表达式的静态类型只通过检查器的 `returnType` 字段传递（Visitor 的 `Visit*` 方法统一返回 `(Node, error)`，不返回类型）。检查任何子表达式**之前**必须先把 `returnType` 置 `nil`：
@@ -158,13 +156,15 @@ type TypeDef struct {
 `SysObject` 同时承担两个角色：**类层次的根** 与 **"未知/不检查"**。`"any"` 与 `"object"` 都指向它。
 
 ```
-SysObject            ← 万能顶级：既是类层次根，也是"未知"
+引用类型:
+SysObject
   ├── SysString
   ├── SysList
   ├── SysMap
   ├── SysDecimal
   └── SysFunction
-SysInt8 / SysInt32 / SysInt64 / SysBool / SysVoid
+
+值类型: SysInt8 / SysInt32 / SysInt64 / SysBool / SysVoid
 ```
 
 整个检查器的"未知即放行"只靠一行开关：
@@ -175,15 +175,15 @@ func (t *TypeDef) IsDynamic() bool { return t == SysObject }
 
 ### 2.4 `null`
 
-**`null` 不是类型**，只是一个关键字字面量，表示"这个值是 null"。它的静态类型就是 `SysObject`。
+**`null`**，表示"这个值是 null"。它的静态类型就是 `SysObject`。
 
 - 类型系统中**不存在** `TypeNull` / `SysNull` / `IsNull()`。
-- `let x = null;`、`null == ""`、`let y string = null;`、`null.foo` 全部放行。
+- `let x = null;`、`let y string = null;`、`let a = 10; a = null;` 全部放行。
 - `null()` → `E3012`（不可调用）。
 
 ### 2.5 函数签名即类型
 
-函数的签名**就是它的类型**，挂在 `TypeDef.FunctionMetadata` 上，不引入独立的 `FuncSig`：
+函数的签名即：`TypeDef.FunctionMetadata`：
 
 ```go
 type FunctionMetadata struct {
@@ -235,7 +235,7 @@ type FunctionMetadata struct {
 1. a == nil → b；b == nil → a
 2. Equal(a, b)          → a
 3. 同为数值族           → Decimal 优先，否则 Int32
-4. 其余                 → SysObject      （不报错：分支类型不一致是运行期的事）
+4. 其余                 → SysObject
 ```
 
 ### 2.7 表达式的静态类型推导
@@ -266,7 +266,6 @@ type FunctionMetadata struct {
 | **R1** | 单一职责 | Checker 只做静态检查：**不求值、不改写 AST、不产生字节码**。任何"计算出的值"都不应写回节点 |
 | **R2** | 结果通道唯一 | 表达式类型**只**通过 `returnType` 传递；每个 Expr visitor **必须**汇报类型。这是本设计最重要的不变式 |
 | **R3** | 陈旧值防护 | `checkExpr(e)` 在 `Accept` **之前**先把 `returnType` 置 `nil`，使"忘记设置"退化为放行，而不是静默复用上一个表达式的类型 |
-| **R4** | 诊断位置 | 检查器的 `report()` 一律走 `Report(..., 0, 0, ...)`，渲染为 `--> file:0:0`——**看到 `0:0` 就是检查器发的**。Parser 已能用真实行列号（`p.pos()` 优先取 `Token.Line/Column`，缺失时回退 `lexer.LineMap`）。要检查器也带位置，须先给 AST 节点接上 `Pos` 字段（`ast.go` 已定义 `Pos` 结构体，但尚未接线） |
 
 ### S —— 作用域与声明
 
@@ -378,9 +377,9 @@ type FunctionMetadata struct {
 | `E2001` | `expected '%s', got '%s'` | `expect()` / `reportError()` | 可达 |
 | `E2002` | `expected ';', got '%s'` | `expect(SEMI)` 专用文案（缺分号） | 可达 |
 | `E2003` | `expression '%s' cannot be used as a standalone statement` | — | **不可达**（无调用点） |
-| `E2004` | `integer literal '%s' is out of range for int32` | 整数字面量超过 int32 范围 | 可达 |
+| `E2004` | `integer literal '%s' is out of range for int32 (-2147483648 ~ 2147483647)` | 整数字面量超过 int32 范围 | 可达 |
 | `E2005` | `expected an expression before '%s'` | `parseExpr` 找不到前缀解析函数 | 可达 |
-| `E2006` | `unknown token '%s'` | `parsePrefix` 的 `default` 分支 | **不可达**（16 个已注册前缀 token 全有显式 `case`，`default` 永远走不到） |
+| `E2006` | `unknown token '%s'` | `parsePrefix` 的 `default` 分支 | **不可达** |
 | `E2007` | `no infix parse function for '%s' found` | — | **不可达**（无调用点） |
 | `E2008` | `unknown infix type '%s'` | — | **不可达**（无调用点） |
 
@@ -395,7 +394,7 @@ type FunctionMetadata struct {
 | `E3005` | `semantic error: identifier '%s' has already been declared in this scope` | S2 / S4 / S5 | 可达 |
 | `E3006` | `type inference error: cannot determine the type of variable '%s'; please provide more context` | （保留，暂不触发） | **不可达**（无调用点） |
 | `E3007` | `compiler error: name '%s' is not defined in this scope` | N1 / N2 | 可达 |
-| `E3008` | `cannot assign to immutable variable/binding '%s'` | N3 | 有调用点，但**实际不可触发**——`Symbol.Constant` 只读不写，没有任何代码把它置 true（见 N55） |
+| `E3008` | `cannot assign to immutable variable/binding '%s'` | N3 | 暂不实现 |
 | `E3009` | `cannot reachable the code` | F2 | 可达 |
 | `E3010` | `unknown type '%s'` | C1 | 可达 |
 | `E3011` | `condition must be bool, got '%s'` | C4 / C17 | 可达 |

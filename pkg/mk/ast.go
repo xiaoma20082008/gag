@@ -43,6 +43,7 @@ type Pos struct {
 }
 
 type Node interface {
+	Pos() Pos
 	sealed()
 	Accept(Visitor) (Node, error)
 }
@@ -58,10 +59,14 @@ type Statement interface {
 }
 
 type IdentExpr struct {
+	pos Pos
+
 	Id string
 }
 
 type litExpr[T int32 | bool | string] struct {
+	pos Pos
+
 	Value T
 }
 
@@ -73,14 +78,20 @@ type StringLitExpr litExpr[string]
 
 type DecimalLitExpr litExpr[string]
 
-type NullLitExpr struct{}
+type NullLitExpr struct {
+	pos Pos
+}
 
 type MapLitExpr struct {
+	pos Pos
+
 	Keys   []string // 保证顺序
 	Values map[string]Expression
 }
 
 type ListLitExpr struct {
+	pos Pos
+
 	Values []Expression
 }
 
@@ -97,79 +108,111 @@ type ComparisonExpr struct {
 }
 
 type UnaryExpr struct {
+	pos Pos
+
 	Op    TokenType
 	Right Expression
 }
 
 // CtxExpr 表示请求上下文 $
-type CtxExpr struct{}
+type CtxExpr struct {
+	pos Pos
+}
 
 type CallExpr struct {
+	pos Pos
+
 	Func Expression
 	Args []Expression
 }
 
 type IndexExpr struct {
+	pos Pos
+
 	Node  Expression
 	Index Expression
 }
 
 type DotExpr struct {
+	pos Pos
+
 	Object   Expression
-	Property string
+	Property *IdentExpr
 }
 
 type ParenExpr struct {
+	pos Pos
+
 	Sub Expression
 }
 
 // TernaryExpr 三元运算符
 type TernaryExpr struct {
+	pos Pos
+
 	Cond Expression
 	Then Expression
 	Else Expression
 }
 
 type AssignExpr struct {
+	pos Pos
+
 	Name  Expression
 	Value Expression
 }
 
 type LetStmt struct {
+	pos Pos
+
 	Name  *IdentExpr
 	Type  *IdentExpr
 	Value Expression
 }
 
 type IfStmt struct {
+	pos Pos
+
 	Cond Expression
 	Then *BlockStmt
 	Else *BlockStmt
 }
 
 type WhileStmt struct {
+	pos Pos
+
 	Cond Expression
 	Body *BlockStmt
 }
 
 type BlockStmt struct {
+	pos Pos
+
 	Statements []Statement
 }
 
 type ReturnStmt struct {
+	pos Pos
+
 	Value Expression
 }
 
 type BreakStmt struct {
+	pos Pos
+
 	Label *IdentExpr
 }
 
 type ExprStmt struct {
+	pos Pos
+
 	Expr Expression
 }
 
 type FuncStmt struct {
-	Name     string
+	pos Pos
+
+	Name     *IdentExpr
 	ArgNames []*IdentExpr
 	ArgTypes []*IdentExpr
 	Body     *BlockStmt
@@ -177,6 +220,8 @@ type FuncStmt struct {
 }
 
 type Program struct {
+	pos Pos
+
 	Statements []Statement
 }
 
@@ -228,6 +273,34 @@ func (n *ParenExpr) expr()      {}
 func (n *TernaryExpr) expr()    {}
 func (n *AssignExpr) expr()     {}
 
+func (n *IdentExpr) Pos() Pos      { return n.pos }
+func (n *IntLitExpr) Pos() Pos     { return n.pos }
+func (n *BoolLitExpr) Pos() Pos    { return n.pos }
+func (n *StringLitExpr) Pos() Pos  { return n.pos }
+func (n *MapLitExpr) Pos() Pos     { return n.pos }
+func (n *ListLitExpr) Pos() Pos    { return n.pos }
+func (n *NullLitExpr) Pos() Pos    { return n.pos }
+func (n *DecimalLitExpr) Pos() Pos { return n.pos }
+func (n *ArithmeticExpr) Pos() Pos { return n.Left.Pos() }
+func (n *ComparisonExpr) Pos() Pos { return n.Left.Pos() }
+func (n *AssignExpr) Pos() Pos     { return n.pos }
+func (n *UnaryExpr) Pos() Pos      { return n.pos }
+func (n *CtxExpr) Pos() Pos        { return n.pos }
+func (n *CallExpr) Pos() Pos       { return n.pos }
+func (n *IndexExpr) Pos() Pos      { return n.pos }
+func (n *DotExpr) Pos() Pos        { return n.pos }
+func (n *ParenExpr) Pos() Pos      { return n.pos }
+func (n *TernaryExpr) Pos() Pos    { return n.pos }
+func (n *FuncStmt) Pos() Pos       { return n.pos }
+func (n *LetStmt) Pos() Pos        { return n.pos }
+func (n *IfStmt) Pos() Pos         { return n.pos }
+func (n *WhileStmt) Pos() Pos      { return n.pos }
+func (n *BlockStmt) Pos() Pos      { return n.pos }
+func (n *ReturnStmt) Pos() Pos     { return n.pos }
+func (n *BreakStmt) Pos() Pos      { return n.pos }
+func (n *ExprStmt) Pos() Pos       { return n.pos }
+func (n *Program) Pos() Pos        { return n.pos }
+
 func (n *FuncStmt) stmt()   {}
 func (n *LetStmt) stmt()    {}
 func (n *IfStmt) stmt()     {}
@@ -265,3 +338,7 @@ func (n *ReturnStmt) Accept(v Visitor) (Node, error)     { return v.VisitReturn(
 func (n *BreakStmt) Accept(v Visitor) (Node, error)      { return v.VisitBreak(n) }
 func (n *ExprStmt) Accept(v Visitor) (Node, error)       { return v.VisitExpr(n) }
 func (n *Program) Accept(v Visitor) (Node, error)        { return v.VisitProgram(n) }
+
+func newPos(line, column int) Pos {
+	return Pos{Line: line, Column: column}
+}

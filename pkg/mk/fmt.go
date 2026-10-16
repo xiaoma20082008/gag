@@ -152,7 +152,7 @@ func (f *formatter) VisitIndex(n *IndexExpr) (Node, error) {
 func (f *formatter) VisitDot(n *DotExpr) (Node, error) {
 	n.Object.Accept(f)
 	f.sb.WriteString(".")
-	f.sb.WriteString(n.Property)
+	f.sb.WriteString(n.Property.Id)
 	return n, nil
 }
 
@@ -174,7 +174,7 @@ func (f *formatter) VisitTernary(n *TernaryExpr) (Node, error) {
 
 func (f *formatter) VisitFunc(n *FuncStmt) (Node, error) {
 	f.sb.WriteString("fn ")
-	f.sb.WriteString(n.Name)
+	f.sb.WriteString(n.Name.Id)
 	f.sb.WriteString("(")
 	for i, argName := range n.ArgNames {
 		argType := n.ArgTypes[i]

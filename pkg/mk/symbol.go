@@ -147,7 +147,7 @@ func (tab *SymbolTable) Depth() int {
 	return tab.current.depth
 }
 
-func (tab *SymbolTable) Define(name string, kind SymbolKind, typ *TypeDef) (*Symbol, error) {
+func (tab *SymbolTable) Define(name string, kind SymbolKind, typ *TypeDef, line, col int) (*Symbol, error) {
 	cur := tab.current
 	if _, exists := cur.store[name]; exists {
 		return nil, fmt.Errorf("variable %s already defined in this scope.", name)
@@ -158,6 +158,10 @@ func (tab *SymbolTable) Define(name string, kind SymbolKind, typ *TypeDef) (*Sym
 		Type:  typ,
 		Index: *cur.index,
 		Depth: cur.depth,
+
+		File:   "", // TODO
+		Line:   line,
+		Column: col,
 	}
 	*cur.index = *cur.index + 1
 	cur.store[name] = sym

@@ -1,6 +1,8 @@
 package mk
 
-import "sort"
+import (
+	"sort"
+)
 
 const EOI = 0
 
@@ -271,7 +273,7 @@ func (l *Lexer) ensure(lookahead int) {
 	}
 }
 
-func (l *Lexer) readString() (string, bool) {
+func (l *Lexer) readString0() (string, bool) {
 	// 1.
 	p := l.pos
 
@@ -299,6 +301,64 @@ func (l *Lexer) readString() (string, bool) {
 	ret := l.input[p+1 : l.pos]
 
 	// 5. 跳过末尾的"
+	l.readChar()
+
+	return ret, true
+}
+
+func (l *Lexer) readString() (string, bool) {
+	p := l.pos
+
+	// 跳过开头的"
+	l.readChar()
+
+	buf := make([]byte, 0, 16)
+
+	for l.ch != '"' && l.ch != 0 {
+		if l.ch != '\\' {
+			buf = append(buf, l.ch)
+			l.readChar()
+			continue
+		}
+		bslashPos := l.pos
+		l.readChar()
+		if l.ch == EOI {
+			break
+		}
+		switch l.ch {
+		case 'r':
+			buf = append(buf, '\r')
+		case 'n':
+			buf = append(buf, '\n')
+		case 't':
+			buf = append(buf, '\t')
+		case 'f':
+			buf = append(buf, '\f')
+		case '"':
+			buf = append(buf, '"')
+		case '0':
+			buf = append(buf, 0)
+		case '\\':
+			buf = append(buf, '\\')
+		case '\'':
+			buf = append(buf, '\'')
+		default:
+			line, col := l.LineMap(bslashPos)
+			l.errors.Report(ErrInvalidEscape, line, col, string(l.ch))
+			buf = append(buf, '\\', l.ch)
+		}
+		l.readChar()
+	}
+
+	if l.ch == EOI {
+		line, col := l.LineMap(p)
+		l.errors.Report(ErrUnterminatedString, line, col)
+		return "", false
+	}
+
+	ret := string(buf)
+
+	// 跳过末尾的"
 	l.readChar()
 
 	return ret, true

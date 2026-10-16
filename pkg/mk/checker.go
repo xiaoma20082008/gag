@@ -44,7 +44,7 @@ func (c *Checker) Check(n Node) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			c.report(ErrCheckerInternal, fmt.Sprint(r))
+			c.report(ErrCheckerInternal, nil, fmt.Sprint(r))
 		}
 	}()
 	n.Accept(c)
@@ -55,7 +55,7 @@ func (c *Checker) Check(n Node) {
 func (c *Checker) VisitIdent(n *IdentExpr) (Node, error) {
 	sym, ok := c.symtab.Resolve(n.Id)
 	if !ok {
-		c.report(ErrUndefinedIdentifierStatic, n.Id)
+		c.report(ErrUndefinedIdentifierStatic, n, n.Id)
 		c.setType(SysObject)
 		return n, nil
 	}
@@ -66,7 +66,7 @@ func (c *Checker) VisitIdent(n *IdentExpr) (Node, error) {
 func (c *Checker) VisitAssign(n *AssignExpr) (Node, error) {
 	if !c.isLValue(n.Name) {
 		name := Format(n.Name)
-		c.report(ErrInvalidLValue, name)
+		c.report(ErrInvalidLValue, n.Name, name)
 		c.checkExpr(n.Value)
 		c.setType(SysObject)
 		return n, nil
@@ -78,17 +78,18 @@ func (c *Checker) VisitAssign(n *AssignExpr) (Node, error) {
 		sym, ok := c.symtab.Resolve(target.Id)
 		if !ok {
 			if c.ImplicitDeclare {
-				_, _ = c.symtab.Define(target.Id, KindVariable, valueType)
+				line, col := posOf(target)
+				_, _ = c.symtab.Define(target.Id, KindVariable, valueType, line, col)
 			} else {
-				c.report(ErrUndefinedIdentifierStatic, target.Id)
+				c.report(ErrUndefinedIdentifierStatic, n.Name, target.Id)
 			}
 			c.setType(valueType)
 			return n, nil
 		}
 		if sym.Constant {
-			c.report(ErrAssignToImmutable, target.Id)
+			c.report(ErrAssignToImmutable, n.Name, target.Id)
 		} else if !AssignableTo(valueType, sym.Type) {
-			c.report(ErrTypeMismatchAssign, valueType.String(), sym.Type.String())
+			c.report(ErrTypeMismatchAssign, n.Name, valueType.String(), sym.Type.String())
 		}
 		c.setType(valueType)
 
@@ -123,7 +124,8 @@ func (c *Checker) VisitMap(n *MapLitExpr) (Node, error) {
 	seen := make(map[string]bool, len(n.Keys))
 	for _, k := range n.Keys {
 		if seen[k] {
-			c.report(ErrDuplicateKey, k)
+			// TODO 应该标记 k 的位置
+			c.report(ErrDuplicateKey, n, k)
 		}
 		seen[k] = true
 	}
@@ -164,21 +166,21 @@ func (c *Checker) VisitArithmetic(n *ArithmeticExpr) (Node, error) {
 			return n, nil
 		}
 		if !isNumericish(lhs) || !isNumericish(rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 		c.setType(numericResult(lhs, rhs))
 	case MINUS, STAR, SLASH:
 		if !isNumericish(lhs) || !isNumericish(rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 		c.setType(numericResult(lhs, rhs))
 	case PERCENT, LTLT, GTGT, BIT_AND, BIT_OR, BIT_XOR:
 		if !isIntish(lhs) || !isIntish(rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 		c.setType(numericResult(lhs, rhs))
 	default:
-		c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+		c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		c.setType(SysObject)
 	}
 	return n, nil
@@ -190,18 +192,18 @@ func (c *Checker) VisitComparison(n *ComparisonExpr) (Node, error) {
 	switch n.Op {
 	case AND, OR, LOG_AND, LOG_OR:
 		if !isBoolish(lhs) || !isBoolish(rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 	case EQ, NE:
 		if !comparable(lhs, rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 	case LT, LE, GT, GE:
 		if !ordered(lhs, rhs) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 		}
 	default:
-		c.report(ErrTypeMismatchOperator, n.Op.String(), lhs.String(), rhs.String())
+		c.report(ErrTypeMismatchOperator, n, n.Op.String(), lhs.String(), rhs.String())
 	}
 	c.setType(SysBool)
 	return n, nil
@@ -212,12 +214,12 @@ func (c *Checker) VisitUnary(n *UnaryExpr) (Node, error) {
 	switch n.Op {
 	case BANG:
 		if !isBoolish(t) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), t.String(), t.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), t.String(), t.String())
 		}
 		c.setType(SysBool)
 	case PLUS, MINUS:
 		if !isNumericish(t) {
-			c.report(ErrTypeMismatchOperator, n.Op.String(), t.String(), t.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), t.String(), t.String())
 		}
 		c.setType(numericResult(t, t))
 	case TILDE:
@@ -227,11 +229,11 @@ func (c *Checker) VisitUnary(n *UnaryExpr) (Node, error) {
 		case isBoolish(t):
 			c.setType(SysBool)
 		default:
-			c.report(ErrTypeMismatchOperator, n.Op.String(), t.String(), t.String())
+			c.report(ErrTypeMismatchOperator, n, n.Op.String(), t.String(), t.String())
 			c.setType(SysObject)
 		}
 	default:
-		c.report(ErrTypeMismatchOperator, n.Op.String(), t.String(), t.String())
+		c.report(ErrTypeMismatchOperator, n, n.Op.String(), t.String(), t.String())
 		c.setType(SysObject)
 	}
 	return n, nil
@@ -249,38 +251,33 @@ func (c *Checker) VisitCall(n *CallExpr) (Node, error) {
 	case *IdentExpr:
 		sym, ok := c.symtab.Resolve(f.Id)
 		if !ok {
-			c.report(ErrUndefinedFunction, f.Id) // C13
-			c.checkArgs(n.Args, nil)
+			c.report(ErrUndefinedFunction, f, f.Id)
+			c.checkArgs(n, nil)
 			c.setType(SysObject)
 			return n, nil
 		}
 		switch sig := sym.Type.Signature(); {
 		case sig != nil:
-			// 有签名：校验个数与类型（C10 / C12），返回类型取签名
-			c.checkArgs(n.Args, sig)
+			c.checkArgs(n, sig)
 			c.setType(sig.ReturnType)
 		case sym.Type == SysFunction || sym.Kind == KindFunction || sym.Kind == KindBuiltin:
-			// 是函数值但拿不到签名（如 let f = fn(){}; f();）：
-			// 只能查实参本身，返回 Any —— 绝不误报 C11
-			c.checkArgs(n.Args, nil)
+			c.checkArgs(n, nil)
 			c.setType(SysObject)
 		default:
-			// 明确不是函数（如 let x = 1; x();）
-			c.report(ErrNotCallable, sym.Type.String()) // C11
-			c.checkArgs(n.Args, nil)
+			c.report(ErrNotCallable, f, f.Id)
+			c.checkArgs(n, nil)
 			c.setType(SysObject)
 		}
 
 	case *DotExpr, *IndexExpr:
-		// 方法调用：a.b(...) —— 接收者是动态的，参数照查
 		c.checkExpr(callee)
-		c.checkArgs(n.Args, nil)
-		c.setType(SysObject) // D4
+		c.checkArgs(n, nil)
+		c.setType(SysObject)
 
 	default:
 		t := c.checkExpr(n.Func)
-		c.report(ErrNotCallable, t.String()) // C11
-		c.checkArgs(n.Args, nil)
+		c.report(ErrNotCallable, n.Func, t.String())
+		c.checkArgs(n, nil)
 		c.setType(SysObject)
 	}
 	return n, nil
@@ -294,20 +291,20 @@ func (c *Checker) VisitIndex(n *IndexExpr) (Node, error) {
 	case obj == nil || obj.IsDynamic():
 	case obj == SysMap:
 		if !isStringish(idx) {
-			c.report(ErrTypeMismatchOperator, "[]", obj.String(), idx.String())
+			c.report(ErrTypeMismatchOperator, n.Node, "[]", obj.String(), idx.String())
 		}
 	case obj == SysList:
 		if !isIntish(idx) {
-			c.report(ErrTypeMismatchOperator, "[]", obj.String(), idx.String())
+			c.report(ErrTypeMismatchOperator, n.Index, "[]", obj.String(), idx.String())
 		}
 	case obj == SysString:
 		if !isIntish(idx) {
-			c.report(ErrTypeMismatchOperator, "[]", obj.String(), idx.String())
+			c.report(ErrTypeMismatchOperator, n.Index, "[]", obj.String(), idx.String())
 		}
 		c.setType(SysString)
 		return n, nil
 	default:
-		c.report(ErrNotIndexable, obj.String())
+		c.report(ErrNotIndexable, n.Node, obj.String())
 	}
 	c.setType(SysObject)
 	return n, nil
@@ -316,7 +313,7 @@ func (c *Checker) VisitIndex(n *IndexExpr) (Node, error) {
 func (c *Checker) VisitDot(n *DotExpr) (Node, error) {
 	obj := c.checkExpr(n.Object)
 	if !fieldAccessible(obj) {
-		c.report(ErrNoFieldAccess, obj.String())
+		c.report(ErrNoFieldAccess, n, obj.String())
 	}
 	c.setType(SysObject)
 	return n, nil
@@ -330,7 +327,7 @@ func (c *Checker) VisitParen(n *ParenExpr) (Node, error) {
 func (c *Checker) VisitTernary(n *TernaryExpr) (Node, error) {
 	cond := c.checkExpr(n.Cond)
 	if !isBoolish(cond) {
-		c.report(ErrConditionNotBool, cond.String())
+		c.report(ErrConditionNotBool, n.Cond, cond.String())
 	}
 	thenT := c.checkExpr(n.Then)
 	elseT := c.checkExpr(n.Else)
@@ -348,7 +345,7 @@ func (c *Checker) VisitFunc(n *FuncStmt) (Node, error) {
 			if t, ok := LookupType(n.ArgTypes[i].Id); ok { // C1
 				pt = t
 			} else {
-				c.report(ErrUnknownType, n.ArgTypes[i].Id)
+				c.report(ErrUnknownType, n.ArgTypes[i], n.ArgTypes[i].Id)
 			}
 		}
 		paramTypes[i] = pt
@@ -365,10 +362,10 @@ func (c *Checker) VisitFunc(n *FuncStmt) (Node, error) {
 
 	// 函数类型
 	ft := &TypeDef{
-		Name: "fn " + n.Name,
+		Name: "fn " + n.Name.Id,
 		Kind: TypeFunction,
 		FunctionMetadata: &FunctionMetadata{
-			Name:           n.Name,
+			Name:           n.Name.Id,
 			ParameterTypes: paramTypes,
 			ReturnType:     returnType,
 			MinArgs:        len(paramTypes),
@@ -376,18 +373,20 @@ func (c *Checker) VisitFunc(n *FuncStmt) (Node, error) {
 		},
 	}
 
-	if n.Name != "" {
-		if _, err := c.symtab.Define(n.Name, KindFunction, ft); err != nil {
-			c.report(ErrRedefinedIdentifier, n.Name)
+	if n.Name.Id != "" {
+		line, col := posOf(n.Name)
+		if _, err := c.symtab.Define(n.Name.Id, KindFunction, ft, line, col); err != nil {
+			c.report(ErrRedefinedIdentifier, n.Name, n.Name.Id)
 		}
 	}
 
-	c.symtab.Enter("fn " + n.Name)
+	c.symtab.Enter("fn " + n.Name.Id)
 	defer c.symtab.Leave()
 
 	for i, argName := range n.ArgNames {
-		if _, err := c.symtab.Define(argName.Id, KindParam, paramTypes[i]); err != nil {
-			c.report(ErrRedefinedIdentifier, argName.Id)
+		line, col := posOf(argName)
+		if _, err := c.symtab.Define(argName.Id, KindParam, paramTypes[i], line, col); err != nil {
+			c.report(ErrRedefinedIdentifier, argName, argName.Id)
 		}
 	}
 
@@ -417,7 +416,7 @@ func (c *Checker) VisitLet(n *LetStmt) (Node, error) {
 	if n.Value != nil {
 		valueType = c.checkExpr(n.Value)
 		if declared != nil && !AssignableTo(valueType, declared) {
-			c.report(ErrTypeMismatchAssign, valueType.String(), declared.String())
+			c.report(ErrTypeMismatchAssign, n.Value, valueType.String(), declared.String())
 		}
 	}
 
@@ -425,8 +424,9 @@ func (c *Checker) VisitLet(n *LetStmt) (Node, error) {
 	if finalType == nil {
 		finalType = valueType // 类型推导
 	}
-	if _, err := c.symtab.Define(n.Name.Id, KindVariable, finalType); err != nil {
-		c.report(ErrRedefinedIdentifier, n.Name.Id)
+	line, col := posOf(n.Name)
+	if _, err := c.symtab.Define(n.Name.Id, KindVariable, finalType, line, col); err != nil {
+		c.report(ErrRedefinedIdentifier, n.Name, n.Name.Id)
 	}
 	return n, nil
 }
@@ -434,7 +434,7 @@ func (c *Checker) VisitLet(n *LetStmt) (Node, error) {
 func (c *Checker) VisitIf(n *IfStmt) (Node, error) {
 	cond := c.checkExpr(n.Cond)
 	if !isBoolish(cond) {
-		c.report(ErrConditionNotBool, cond.String())
+		c.report(ErrConditionNotBool, n.Cond, cond.String())
 	}
 	if n.Then != nil {
 		n.Then.Accept(c)
@@ -448,7 +448,7 @@ func (c *Checker) VisitIf(n *IfStmt) (Node, error) {
 func (c *Checker) VisitWhile(n *WhileStmt) (Node, error) {
 	cond := c.checkExpr(n.Cond)
 	if !isBoolish(cond) {
-		c.report(ErrConditionNotBool, cond.String())
+		c.report(ErrConditionNotBool, n.Cond, cond.String())
 	}
 	c.loopDepth++
 	if n.Body != nil {
@@ -465,7 +465,7 @@ func (c *Checker) VisitBlock(n *BlockStmt) (Node, error) {
 	returned := false
 	for _, stmt := range n.Statements {
 		if returned {
-			c.report(ErrUnreachableCode)
+			c.report(ErrUnreachableCode, stmt)
 		}
 		stmt.Accept(c)
 
@@ -486,7 +486,7 @@ func (c *Checker) VisitReturn(n *ReturnStmt) (Node, error) {
 	if len(c.returnStack) > 0 {
 		want := c.returnStack[len(c.returnStack)-1]
 		if want != nil && !AssignableTo(got, want) {
-			c.report(ErrTypeMismatchReturn, want.String(), got.String())
+			c.report(ErrTypeMismatchReturn, n.Value, want.String(), got.String())
 		}
 	}
 	c.setType(got)
@@ -495,7 +495,7 @@ func (c *Checker) VisitReturn(n *ReturnStmt) (Node, error) {
 
 func (c *Checker) VisitBreak(n *BreakStmt) (Node, error) {
 	if c.loopDepth <= 0 {
-		c.report(ErrBreakOutOfLoop)
+		c.report(ErrBreakOutOfLoop, n)
 	}
 	return n, nil
 }
@@ -509,7 +509,7 @@ func (c *Checker) VisitProgram(n *Program) (Node, error) {
 	returned := false
 	for _, stmt := range n.Statements {
 		if returned {
-			c.report(ErrUnreachableCode)
+			c.report(ErrUnreachableCode, stmt)
 		}
 		stmt.Accept(c)
 
@@ -540,10 +540,11 @@ func (c *Checker) checkExpr(n Expression) *TypeDef {
 	return c.returnType
 }
 
-func (c *Checker) checkArgs(args []Expression, sig *FunctionMetadata) {
+func (c *Checker) checkArgs(n *CallExpr, sig *FunctionMetadata) {
+	args := n.Args
 	if sig != nil {
 		if len(args) < sig.MinArgs || (sig.MaxArgs >= 0 && len(args) > sig.MaxArgs) {
-			c.report(ErrWrongArgCountStatic, sig.Name, sig.MinArgs, len(args))
+			c.report(ErrWrongArgCountStatic, n, sig.Name, sig.MinArgs, len(args))
 		}
 	}
 	for i, a := range args {
@@ -556,7 +557,7 @@ func (c *Checker) checkArgs(args []Expression, sig *FunctionMetadata) {
 			continue
 		}
 		if !AssignableTo(at, want) {
-			c.report(ErrTypeMismatchArgument, i+1, want.String(), at.String())
+			c.report(ErrTypeMismatchArgument, a, i+1, want.String(), at.String())
 		}
 	}
 }
@@ -570,8 +571,9 @@ func (c *Checker) isLValue(n Expression) bool {
 	}
 }
 
-func (c *Checker) report(desc DiagnosticDescriptor, args ...any) {
-	c.errors.Report(desc, 0, 0, args...)
+func (c *Checker) report(desc DiagnosticDescriptor, n Node, args ...any) {
+	line, col := posOf(n)
+	c.errors.Report(desc, line, col, args...)
 }
 
 func (c *Checker) resolveType(id *IdentExpr) *TypeDef {
@@ -580,7 +582,7 @@ func (c *Checker) resolveType(id *IdentExpr) *TypeDef {
 	}
 	t, ok := LookupType(id.Id)
 	if !ok {
-		c.report(ErrUnknownType, id.Id)
+		c.report(ErrUnknownType, id, id.Id)
 		return nil
 	}
 	return t
@@ -595,8 +597,6 @@ func unwrapParen(e Expression) Expression {
 		e = p.Sub
 	}
 }
-
-// ---- 类型谓词：nil 与 Any 一律放行（D2），避免"检查不出来就报错" ----
 
 func isBoolish(t *TypeDef) bool    { return t == nil || t.IsDynamic() || t == SysBool }
 func isNumericish(t *TypeDef) bool { return t == nil || t.IsDynamic() || t.IsNumeric() }
@@ -645,4 +645,12 @@ func ordered(a, b *TypeDef) bool {
 		return true
 	}
 	return a == SysString && b == SysString
+}
+
+func posOf(n Node) (int, int) {
+	if n == nil {
+		return 0, 0
+	}
+	p := n.Pos()
+	return p.Line, p.Column
 }
