@@ -2,6 +2,7 @@ package mk
 
 import (
 	"sort"
+	"strings"
 )
 
 const EOI = 0
@@ -273,79 +274,53 @@ func (l *Lexer) ensure(lookahead int) {
 	}
 }
 
-func (l *Lexer) readString0() (string, bool) {
-	// 1.
-	p := l.pos
-
-	// 2.跳过开头的"
-	l.readChar()
-
-	for l.ch != '"' && l.ch != 0 {
-		if l.ch == '\\' {
-			l.readChar()
-			if l.ch == EOI {
-				break
-			}
-		}
-		l.readChar()
-	}
-
-	// 3.
-	if l.ch == EOI {
-		line, col := l.LineMap(p)
-		l.errors.Report(ErrUnterminatedString, line, col)
-		return "", false
-	}
-
-	// 4.
-	ret := l.input[p+1 : l.pos]
-
-	// 5. 跳过末尾的"
-	l.readChar()
-
-	return ret, true
-}
-
 func (l *Lexer) readString() (string, bool) {
 	p := l.pos
 
 	// 跳过开头的"
 	l.readChar()
 
-	buf := make([]byte, 0, 16)
+	var buf strings.Builder
 
 	for l.ch != '"' && l.ch != 0 {
+		if l.ch == '\n' {
+			line, col := l.LineMap(p)
+			l.errors.Report(ErrUnterminatedString, line, col)
+			return "", false
+		}
 		if l.ch != '\\' {
-			buf = append(buf, l.ch)
+			buf.WriteByte(l.ch)
 			l.readChar()
 			continue
 		}
 		bslashPos := l.pos
 		l.readChar()
+
 		if l.ch == EOI {
 			break
 		}
 		switch l.ch {
 		case 'r':
-			buf = append(buf, '\r')
+			buf.WriteByte('\r')
 		case 'n':
-			buf = append(buf, '\n')
+			buf.WriteByte('\n')
 		case 't':
-			buf = append(buf, '\t')
+			buf.WriteByte('\t')
 		case 'f':
-			buf = append(buf, '\f')
+			buf.WriteByte('\f')
 		case '"':
-			buf = append(buf, '"')
+			buf.WriteByte('"')
 		case '0':
-			buf = append(buf, 0)
+			buf.WriteByte(0)
 		case '\\':
-			buf = append(buf, '\\')
+			buf.WriteByte('\\')
 		case '\'':
-			buf = append(buf, '\'')
+			buf.WriteByte('\'')
 		default:
 			line, col := l.LineMap(bslashPos)
 			l.errors.Report(ErrInvalidEscape, line, col, string(l.ch))
-			buf = append(buf, '\\', l.ch)
+			buf.WriteByte('\\')
+			buf.WriteByte(l.ch)
 		}
 		l.readChar()
 	}
@@ -356,7 +331,7 @@ func (l *Lexer) readString() (string, bool) {
 		return "", false
 	}
 
-	ret := string(buf)
+	ret := buf.String()
 
 	// 跳过末尾的"
 	l.readChar()
