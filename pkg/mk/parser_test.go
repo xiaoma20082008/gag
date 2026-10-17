@@ -49,6 +49,16 @@ func TestParser_ParseExpr(t *testing.T) {
 			want: &DecimalLitExpr{pos: Pos{1, 1}, Value: "10.25"},
 		},
 		{
+			name: "decimal-neg",
+			ctx:  NewCompilationContext("test.mk", `-10.25`),
+			want: &DecimalLitExpr{pos: Pos{1, 1}, Value: "-10.25"},
+		},
+		{
+			name: "decimal-neg2",
+			ctx:  NewCompilationContext("test.mk", `-3.14e5`),
+			want: &DecimalLitExpr{pos: Pos{1, 1}, Value: "-3.14e5"},
+		},
+		{
 			name: "bool",
 			ctx:  NewCompilationContext("test.mk", `true`),
 			want: &BoolLitExpr{pos: Pos{1, 1}, Value: true},

@@ -1,0 +1,153 @@
+# Gag 网关配置
+
+version: v1
+
+server:
+  listen: ":8080"
+  # 管理端口：健康检查、指标与控制面 API 都走这里，默认只绑回环。
+  # 与 listen 必须使用不同端口，否则配置校验会直接拒绝。
+  admin_listen: "127.0.0.1:9090"
+  # 管理端点 token；留空时只允许本机访问 /admin/*
+  admin_token: "dev-admin-token"
+  read_header_timeout: 10s
+  idle_timeout: 90s
+  shutdown_timeout: 15s
+  max_body_bytes: 1048576
+  default_tenant: order
+  ip_allow: []
+  ip_deny: []
+  cors:
+    allow_origins: ["https://console.example.com"]
+    allow_methods: ["GET", "POST", "OPTIONS"]
+    allow_headers:
+      ["Content-Type", "Authorization", "X-API-Key", "X-Tenant", "X-Request-Id"]
+    allow_credentials: true
+    max_age: 600s
+
+tenants:
+  - name: order
+    description: 交易域
+    services:
+      - name: order-service
+        protocol: http
+        timeout: 2s
+
+        auth:
+          type: api_key
+          header: X-API-Key
+          keys: ["dev-key-1"]
+
+        rate_limit:
+          rps: 100
+          burst: 200
+          key: ip
+          algorithm: token_bucket
+
+        breaker:
+          error_rate: 0.5
+          min_requests: 20
+          open_timeout: 5s
+          half_open_requests: 3
+
+        retry:
+          max_attempts: 2
+          backoff: 50ms
+          max_backoff: 500ms
+          jitter: 0.2
+          retry_on: [429]
+
+        routes:
+          - id: order.create
+            path: /v1/orders
+            methods: [POST]
+            cluster: order-service-hz
+            validate:
+              content_types: ["application/json"]
+              required_body_fields: [sku, quantity]
+
+          - id: order.get
+            path: /v1/orders/*
+            methods: [GET]
+            cluster: order-service-hz
+            rewrite:
+              strip_prefix: /v1
+            rate_limit:
+              rps: 500
+              burst: 1000
+              key: user
+            split:
+              # 内测流量：带 X-Canary 头的请求直接进入灰度集群
+              - cluster: order-service-canary
+                match:
+                  headers:
+                    X-Canary: "true"
+              # 其余流量按权重分配，5% 灰度
+              - cluster: order-service-canary
+                weight: 5
+              - cluster: order-service-hz
+                weight: 95
+
+        clusters:
+          - name: order-service-hz
+            region: hz
+            version: v1
+            lb: round_robin
+            instances:
+              - addr: 127.0.0.1:9001
+              - addr: 127.0.0.1:9002
+            health_check:
+              path: /healthz
+              interval: 10s
+              timeout: 1s
+              failure_threshold: 3
+              success_threshold: 2
+
+          - name: order-service-canary
+            region: hz
+            version: v2
+            lb: least_conn
+            instances:
+              - addr: 127.0.0.1:9003
+            health_check:
+              path: /healthz
+              interval: 10s
+              timeout: 1s
+
+  - name: ai
+    description: 模型推理域
+    services:
+      - name: model-infer
+        protocol: ai
+        timeout: 60s
+
+        auth:
+          type: jwt
+          header: Authorization
+          secret: "dev-jwt-secret"
+          issuer: gag
+          tenant_claim: tenant
+          scopes: [infer]
+
+        rate_limit:
+          rps: 20
+          burst: 40
+          key: tenant
+          algorithm: sliding_window
+          window: 1s
+
+        routes:
+          - id: ai.chat
+            path: /v1/chat/completions
+            methods: [POST]
+            cluster: model-infer-hz
+            validate:
+              content_types: ["application/json"]
+              required_body_fields: [model, messages]
+
+        clusters:
+          - name: model-infer-hz
+            region: hz
+            version: v1
+            lb: least_conn
+            instances:
+              - addr: 127.0.0.1:9101
