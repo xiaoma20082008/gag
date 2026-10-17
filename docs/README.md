@@ -470,5 +470,6 @@ AI 服务天然具有高延迟和长尾特征，因此需要具备异步化能�
 
 ## 参考文档
 
+- [路由设计](./ROUTING.md)
 - [DSL设计](../pkg/mk/README.md)
 - [运维手册](./OPERATIONS.md)
