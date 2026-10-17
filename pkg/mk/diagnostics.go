@@ -143,6 +143,13 @@ var (
 		Template: "unknown escape sequence '\\%s' in string literal",
 	}
 
+	// E1005: 字符串里出现了无法识别的转义序列
+	ErrInvalidNum = DiagnosticDescriptor{
+		Code:     "E1005",
+		Kind:     KindLexical,
+		Template: "unknown escape sequence '\\%s' in string literal",
+	}
+
 	// ==========================================
 	// 2. 语法错误 (Syntax Errors: E2000 - E2999)
 	// ==========================================

@@ -35,6 +35,13 @@ func (ctx *CompilationContext) Compile() []byte {
 	return ctx.codegen.Gen(p)
 }
 
+// Diagnostics 返回本次编译产生的词法/语法/语义诊断。
+//
+// 上层（如网关的配置加载流程）依赖它把脚本错误挡在下发之前。
+func (ctx *CompilationContext) Diagnostics() []Diagnostic {
+	return ctx.errors.Diagnostics()
+}
+
 type RuntimeContext struct {
 	store map[string]any
 	outer *RuntimeContext

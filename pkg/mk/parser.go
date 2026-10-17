@@ -45,21 +45,22 @@ func NewParser(ctx *CompilationContext) *Parser {
 	// 1.
 	p.prefixFns[IDENT] = p.parsePrefix
 	// 2.
-	p.prefixFns[INT] = p.parsePrefix
-	p.prefixFns[STRING] = p.parsePrefix
+	p.prefixFns[INT] = p.parseInt
+	p.prefixFns[DECIMAL] = p.parseDecimal
+	p.prefixFns[STRING] = p.parseString
 	// 3.
-	p.prefixFns[TRUE] = p.parsePrefix
-	p.prefixFns[FALSE] = p.parsePrefix
+	p.prefixFns[TRUE] = p.parseBool
+	p.prefixFns[FALSE] = p.parseBool
 	p.prefixFns[NULL] = p.parsePrefix
 	// 4.
-	p.prefixFns[PLUS] = p.parsePrefix
-	p.prefixFns[MINUS] = p.parsePrefix
-	p.prefixFns[BANG] = p.parsePrefix
-	p.prefixFns[TILDE] = p.parsePrefix
+	p.prefixFns[PLUS] = p.parseUnary
+	p.prefixFns[MINUS] = p.parseUnary
+	p.prefixFns[BANG] = p.parseUnary
+	p.prefixFns[TILDE] = p.parseUnary
 	// 5.
-	p.prefixFns[LPAREN] = p.parsePrefix
-	p.prefixFns[LBRACE] = p.parsePrefix
-	p.prefixFns[LBRACKET] = p.parsePrefix
+	p.prefixFns[LPAREN] = p.parseGroup
+	p.prefixFns[LBRACE] = p.parseMap
+	p.prefixFns[LBRACKET] = p.parseList
 
 	p.prefixFns[DOLLAR] = p.parsePrefix
 
@@ -236,10 +237,10 @@ func (p *Parser) parsePrefix() Expression {
 		expr = p.parseBool()
 	case INT:
 		expr = p.parseInt()
+	case DECIMAL:
+		expr = p.parseDecimal()
 	case STRING:
-		tok := p.token
-		expr = &StringLitExpr{pos: newPos(tok.Line, tok.Column), Value: p.token.Lit}
-		p.nextToken()
+		expr = p.parseString()
 	case LBRACKET:
 		expr = p.parseList()
 	case LBRACE:
@@ -343,10 +344,22 @@ func (p *Parser) parseInt() Expression {
 	return expr
 }
 
+func (p *Parser) parseDecimal() Expression {
+	tok := p.token
+	p.nextToken()
+	return &DecimalLitExpr{pos: newPos(tok.Line, tok.Column), Value: tok.Lit}
+}
+
+func (p *Parser) parseString() Expression {
+	tok := p.token
+	p.nextToken()
+	return &StringLitExpr{pos: newPos(tok.Line, tok.Column), Value: tok.Lit}
+}
+
 func (p *Parser) parseUnary() Expression {
 	tok := p.token
 	p.nextToken()
-	if tok.Type == MINUS && p.token.Type == INT { // 负数
+	if tok.Type == MINUS && p.token.Type == INT { // -123
 		v := "-" + p.token.Lit
 		v64, err := strconv.ParseInt(v, 10, 64)
 		var expr *IntLitExpr
@@ -360,6 +373,10 @@ func (p *Parser) parseUnary() Expression {
 			}
 			expr = &IntLitExpr{pos: newPos(tok.Line, tok.Column), Value: int32(v64)}
 		}
+		p.nextToken()
+		return expr
+	} else if tok.Type == MINUS && p.token.Type == DECIMAL { // -123.45
+		expr := &DecimalLitExpr{pos: newPos(tok.Line, tok.Column), Value: "-" + p.token.Lit}
 		p.nextToken()
 		return expr
 	}
