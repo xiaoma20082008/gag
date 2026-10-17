@@ -6,10 +6,14 @@ type ChatRequest struct{}
 
 type ChatResponse struct{}
 
-type ClientConfig struct{}
-
 type LLMClient interface {
 	ChatWithCtx(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
+}
+
+type ClientConfig struct {
+	BaseUrl string
+	ApiKey  string
+	Token   string
 }
 
 func NewClientConfig() *ClientConfig {
