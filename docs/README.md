@@ -1,35 +1,475 @@
-<!--
- * File: README.md
- * Project: docs
- * File Created: 2024-06-15
- * Author: xiaoma20082008 (mmccxx2519@gmail.com)
- * 
- * ------------------------------------------------------------------------
- * Last Modified At: 2024-06-15 14:21:00
- * Last Modified By: xiaoma20082008 (mmccxx2519@gmail.com>)
- * ------------------------------------------------------------------------
- * 
- * Copyright (C) xiaoma20082008. All rights reserved.
- * 
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * 
- *     https://www.apache.org/licenses/LICENSE-2.0
- * 
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
--->
+# API/AI Gateway 设计文档
 
-# API/AI Gateway
+## 项目简介
 
-## 架构设计
+基于 Go 实现的高性能、可观测、可治理的 API/AI Gateway，用于微服务与 AI 推理服务的统一接入、治理与流量控制。
 
-- [X](./arch.md)
+## 目标与范围
 
-## 功能列表
+- 统一接入：支持 HTTP/gRPC 等协议，提供统一入口、路由与转发。
+- 微服务治理：鉴权/授权、参数校验、限流、熔断、灰度、重试等。
+- 可观测性：Prometheus 指标、OpenTelemetry tracing、结构化访问日志。
+- 高可用：控制/数据平面分离、集群化部署、配置热加载与回滚。
+- 高性能：异步化处理、连接池、下游复用、批量/排队策略。
+- 安全性：mTLS、secret 管理、多维鉴权、审计和回滚。
+- 配置 DSL：声明式配置 DSL，支持版本化与热下发。
 
-- [X](./feature.md)
+## 总体架构
+
+- 控制平面（Gag Admin）：管理 DSL 配置、策略、证书、审计、下发配置到数据平面；提供 UI/API 与审计流程。
+- 数据平面（Gag Server）：无状态/轻状态，高性能请求路径，执行 filter chain（pre → route → invoke → post），上报 metrics/logs/traces。
+
+数据平面实例通过安全通道（mTLS/gRPC）与控制平面通信，支持增量、流式的配置下发与确认回执，实现热加载。
+
+## 详细设计
+
+### 1. 设计原则
+
+在保持高吞吐和低延迟的同时，提供强治理能力与完整可观测性。设计遵循以下原则：
+
+- 以请求为中心：所有治理能力都围绕请求生命周期展开，而不是围绕单个服务孤立存在。
+- 分层解耦：路由、认证、限流、观测、灰度等职责彼此解耦，允许按需组合和热更新。
+- 高性能优先：尽量采用非阻塞 I/O、连接池、短路径、异步日志与指标上报，减少请求链路上不必要的阻塞。
+- 可观测性优先：在每个阶段增加 trace、log、metrics 的埋点，保证故障可定位。
+- 控制与数据分离：控制平面负责配置决策与策略管理，数据平面只负责请求处理与本地执行。
+- 运行时可扩展：通过 filter/plugin + DSL 使网关在不重启情况下支持策略更新。
+
+### 2. 总体请求链路
+
+请求处理流程如下：
+
+1. Client → Gateway 入口
+2. 网关接收请求并创建 request_id / trace_id
+3. Pre 阶段：IP 过滤、鉴权前置处理、请求体大小鉴定、基础速率检查
+4. Route 阶段：按 path/method/header/host 选择 Service、选择版本、计算灰度分流策略
+5. Invoke 阶段：参数校验、权限校验、限流、熔断、重试、请求转换、调用下游服务
+6. Post 阶段：响应转换、访问日志输出、指标上报、链路结束
+7. 返回响应给 Client
+
+请求链路中的每个阶段都具备明确的职责边界，任何阶段都可以用 filter 进行扩展，保证治理逻辑一致、可组合、可热更新。
+
+### 3. Filter 分层设计（pre / route / invoke / post）
+
+#### 3.1 Pre 阶段：入口前置处理
+
+Pre 阶段主要负责在真正执行路由和调用前做“快速过滤”和“基础上下文注入”，目标是尽快拒绝无效请求，减轻后续处理压力。
+
+典型职责：
+
+- 生成 request_id / trace_id / span context
+- 请求体长度限制与协议识别
+- CORS 校验、Host 校验、IP 白名单/黑名单
+- 访问来源识别、客户端信息识别
+- 低成本缩写限流（粗粒度）
+- 统一请求上下文注入（context、tenant、client_id、route_id）
+
+设计原则：
+
+- 优先做低开销、低依赖检查。
+- 对失败请求尽量在最早阶段处理，避免进入更多昂贵阶段。
+- 允许在该阶段对访问日志和 trace 进行初始化。
+
+#### 3.2 Route 阶段：路由决策与流量分发
+
+Route 阶段负责根据请求特征决定该请求被发往哪个服务、哪个版本、哪个实例群体，以及是否需要灰度分流。
+
+设计原则：
+
+- 路由查找应尽可能走缓存与预计算/索引，减少每次请求的匹配成本。
+- 在多租户场景下优先考虑安全与隔离，任何跨租户访问需有明确授权。
+
+核心功能：
+
+- 路由匹配：path、method、host、header、query、tag 等
+- 服务发现与选择：静态路由、动态路由、权重路由
+- 灰度策略执行：按 user_id / header / cookie / region / percentage / token 进行分流
+- 负载均衡：round robin、least connection、consistent hash 等
+- 版本选择：v1/v2/canary 等服务版本
+
+路由查找流程：
+
+Route 阶段的查找流程应采用分层查找策略：
+
+1. Tenant（租户）：根据请求上下文或 header 中的 tenant 标识确定租户（例如: order）。
+2. Service（服务）：在租户命名空间中查找对应的逻辑服务（例如: order-service）。
+3. Cluster（集群）：在 service 下选择 cluster（集群/副本集），cluster 代表一组部署单元（例如: order-service-hz）。
+4. Instance（实例）：从 cluster 的实例列表中选择具体实例（例如: 10.0.0.1:1234）。
+
+查找细节与扩展：
+
+- Tenant 识别：优先从认证上下文/Token 中解析 tenant，若无则改为 header 或 path 规则识别。对 tenant 做存在性与权限校验。
+- Service 解析：服务名由 route 配置映射，支持别名与向后兼容的 route 重写。
+- Cluster 策略：cluster 可基于不同维度划分（地域、性能等级、版本、可用区），cluster 具有独立负载策略与健康检查参数。
+- Instance 选择：在 cluster 内使用负载均衡策略（weight、least_conn、random、consistent_hash），并考虑实例健康、延迟与权重。
+- 多数据中心：支持 cross-dc 策略（偏向同 DC 或按成本/性能排序），并允许 fallback 到跨 DC 的其他 cluster。
+
+缓存与一致性：
+
+- Route/Service/Cluster 信息在数据平面本地缓存，cache key 包括 tenant+service+routeVersion。
+- 配置变更由控制平面下发，使用版本号与生成原子替换，避免不一致。
+- Instance 健康状态由健康检查模块周期性刷新，若 instance 状态异常需尽快移除池并上报。
+
+隔离与权限：
+
+- 多租户隔离：tenant 维度的配置与策略应隔离，防止跨租户访问或配置泄漏。
+- 访问控制：在 Route 阶段可以进行基于 tenant 的 ACL 校验，快速拒绝无权限访问。
+
+故障与降级：
+
+- 当 cluster/instance 无可用后端时触发降级：可选返回静态兜底、访问缓存、或路由到备用 cluster。
+- 在部分实例不可用时，优先剔除并重平衡其余实例承载的流量。
+
+路由阶段的一致性要求：
+
+- 配置下发必须保证原子性：新旧配置在切换窗口不可交叉导致路由错配。
+- 缓存刷新应考虑渐进式替换，避免瞬间大量失效导致抖动。
+
+#### 3.3 Invoke 阶段：核心治理与调用前校验
+
+Invoke 阶段是网关治理最重要的阶段，按“治理策略 -> 请求 -> 执行 -> 观测”设计，负责对真实请求做最终合法性校验、鉴权、限流、熔断、转换等处理，并发起下游调用。
+
+核心职责：
+
+- 参数校验：JSON schema / HTTP 参数 / body 校验
+- 鉴权：JWT、API Key、mTLS、Opaque Token、OIDC 接入
+- 授权：RBAC / ABAC / tenant / resource 权限判定
+- 限流：每秒 QPS、并发数、用户维度、API 维度
+- 熔断：错误率触发、超时率触发、半开恢复
+- 请求转换：请求头、请求字段、租户 ID、签名等转换
+- 包装下游调用：HTTP client / gRPC client / Mesh-sidecar / AI model call
+- 重试与幂等策略：安全重试、指数退避、抖动
+
+#### 3.4 Post 阶段：结果处理与后置上报
+
+Post 阶段在下游调用返回后做后置处理，并统一输出访问日志和指标。
+
+典型职责：
+
+- 响应头标准化与字段过滤
+- 响应脱敏与结构转换
+- 失败处理：返回规范错误码、降级模板
+- 访问日志落盘或上报
+- metrics 统计：qps、latency、error_code、route 信息
+- trace span 结束与链路收尾
+
+### 4. API 治理能力设计
+
+#### 4.1 鉴权与授权
+
+网关的授权逻辑建议分为两层：
+
+- 认证：确认请求身份（JWT、API Key、mTLS、OIDC、签名校验）
+- 授权：确认请求具备访问指定 route/service 的权限
+
+设计建议：
+
+- 支持多种认证器（JWT/AK/SKM/OIDC）
+- 权限模型支持 RBAC、ABAC、tenant/resource granularity
+- 鉴权结果缓存短时有效，降低下游验证成本
+- 支持权限策略通过 DSL 下发，支持动态启停、版本回滚
+
+#### 4.2 参数校验
+
+参数校验位于 Invoke 阶段，要求统一、强约束、可扩展。
+
+支持的校验维度：
+
+- query 参数
+- path 参数
+- header 参数
+- body 参数
+- enum / length / pattern / required / range
+
+设计建议：
+
+- 对请求体采用 schema-driven 校验
+- 校验失败返回统一结构：code、message、trace_id、request_id
+- 对敏感字段统一脱敏策略
+- 对 AI 场景支持模型输入检查（prompt 长度、参数类型、token limit 等）
+
+#### 4.3 限流（Rate Limit）
+
+限流是网关面临的底层能力，建议支持多层级限流：
+
+- 全局限流：整个网关实例或网关集群限流
+- 路由限流：某一 API 路由限流
+- 用户限流：按 user_id / app_id / tenant 限流
+- IP 限流：按客户端地址限流
+- 关键字/特征限流：对异常模式或恶意访问限制
+
+常见算法：
+
+- Token Bucket：适合流量突发平滑场景
+- Leaky Bucket：适合稳定输出控制
+- 滑动窗口：适合平滑统计与更直观的告警
+
+设计建议：
+
+- 分布式限流优先考虑 Redis / 统一限流服务
+- 本地限流用于低延迟短期保护，避免每次都远程访问中心存储
+- 限流事件需要上报 metrics 和日志，以供运维分析
+
+#### 4.4 熔断与降级
+
+熔断是高可用的重要能力，用于保护下游服务在异常时保持网关稳定。
+
+典型设计：
+
+- CLOSED：正常状态，允许请求通过
+- OPEN：达到错误阈值后熔断，短时间快速失败
+- HALF_OPEN：允许少量探测请求，验证下游恢复
+- CLOSED：恢复后再关闭熔断
+
+熔断触发条件：
+
+- 错误率超过阈值
+- 连续失败数超过阈值
+- 上游超时率异常升高
+- 连接失败 / 线程池满 / 协议错误
+
+降级设计：
+
+- 返回静态默认响应
+- 返回缓存结果
+- 调用降级服务 / 替代策略
+- 对 AI 场景可给出“兜底响应模板”
+
+#### 4.5 灰度分流与流量治理
+
+灰度是网关中非常关键的“发布治理能力”。设计目标是让服务升级和流量切换可控。
+
+支持方式：
+
+- 按百分比灰度：只让部分流量命中新版服务
+- 按 tenant / app / user / cookie / header 分流
+- 按 region / geo / network 策略分流
+- 按时间窗口发布：如 10:00-12:00 放量
+- 按版本评估：v1/v2/canary 的监控分离
+
+灰度设计要求：
+
+- 需要 route 层支持流量匹配与 split
+- 每个灰度变更都要绑定 trace tag / metrics tag，便于观察效果
+- 灰度发布必须具备快速回滚能力，不强依赖代码发布
+
+#### 4.6 重试与幂等
+
+- 仅为幂等或可重试行为启用重试
+- 对 POST / 非幂等请求谨慎处理
+- 支持指数退避与 jitter
+- 重试仅在下游超时、连接失败、5xx 等许可场景执行
+
+#### 4.7 安全策略
+
+支持以下策略：
+
+- 认证与授权
+- TLS 终止与证书管理
+- API 签名校验
+- 参数加密与解密（按路由配置）
+- 请求体大小限制与 DOS 防护
+- headers 过滤、防止敏感信息泄漏
+- PII 脱敏与审计日志管理
+
+### 5. 可观测性设计
+
+#### 5.1 Metrics
+
+使用 Prometheus 采集，包含：
+
+- request_total：总请求数
+- request_in_flight：活跃请求数
+- request_duration_seconds：请求耗时分布（P50/P95/P99）
+- upstream_latency_seconds：下游服务耗时
+- error_total：错误数
+- rate_limit_total：限流命中数
+- circuit_breaker_total：熔断事件数
+- config_apply_total：配置下发次数
+- route_status_total：按 route、status、version 维度统计
+
+#### 5.2 Tracing
+
+使用 OpenTelemetry ，关键点：
+
+- 每个请求生成 trace_id / span_id
+- pre/route/invoke/post 各阶段创建 span
+- 下游调用也必须关联 trace context
+- 支持 trace 采样策略：默认低采样，异常/高风险事件强采样
+
+#### 5.3 Logging
+
+日志规范：
+
+- 统一 JSON 格式
+- 支持日志级别分流：INFO / WARN / ERROR
+- 支持脱敏规则（PII、token、密钥等）
+- 日志异步写入，避免直接阻塞请求路径
+
+日志输出：
+
+- timestamp
+- trace_id
+- request_id
+- client_ip
+- route
+- service
+- method
+- path
+- status_code
+- latency_ms
+- upstream
+- auth_result
+- rate_limit_result
+- circuit_state
+- error_code
+
+### 6. 高性能与异步化设计
+
+#### 6.1 高性能目标
+
+- 在高并发场景下保持稳定的 P95/P99 latency
+- 尽量减少每次请求中非必要的 CPU 与内存开销
+- 降低下游连接开销，实现连接复用
+
+#### 6.2 关键优化点
+
+- 非阻塞网络模型：使用高效 Go runtime / I/O 设计
+- HTTP/gRPC 连接池：减少连接建立和断开成本
+- 协程池：控制并发，避免瞬时资源耗尽
+- 缓冲队列：对日志、metrics、事件异步处理
+- 流式处理：对大响应或大请求体尽量采用流式读取/写入
+- 低延迟路由缓存：route/service 解析结果缓存
+
+#### 6.3 AI 场景异步化
+
+AI 服务天然具有高延迟和长尾特征，因此需要具备异步化能力：
+
+- 同步短任务：网关同步等待返回，适合低延迟模型
+- 半异步任务：网关先接入请求，返回任务 ID 或排队状态，随后异步处理
+- 异步任务队列：将请求放入消息队列，由 worker 执行模型调用
+- 结果回调 / 查询：客户端使用任务 ID 拉取或轮询结果
+
+设计要求：
+
+- 对 AI 调用使用任务状态机：queued / running / completed / failed
+- 对长任务设置超时与重试策略
+- 将模型调用链路与网关同步链路分离，避免阻塞主入口
+
+### 7. 高可用设计
+
+#### 7.1 集群和部署
+
+- Gateway 以多副本方式部署，支持跨 AZ / 跨机房部署
+- 使用 LB / Ingress 统一暴露访问入口
+- 数据平面保持无状态或轻状态，以便横向扩展
+- 配置和证书等与业务状态分离，避免单点依赖问题
+
+#### 7.2 健康检查
+
+- liveness：检查进程是否挂起
+- readiness：检查已完成配置加载、依赖连接正常、运行期状态可用
+- 失败实例自动从负载均衡中摘除
+
+#### 7.3 热加载与配置回滚
+
+目标：无需重启网关即可完成策略变更。
+
+热加载流程：
+
+1. 控制平面生成新版本配置
+2. 进行 schema 校验与语义校验
+3. 通过 stream/long-poll 或增量 diff 下发到 Data Plane
+4. Data Plane 校验配置并在本地原子替换
+5. 若存在错误，快速回滚到上一个稳定版本
+
+要求：
+
+- 热加载不阻塞现有活跃请求
+- 支持版本回滚和审计
+- 需要对配置下发状态进行强监控
+
+### 8. 控制面与数据面的分离
+
+网关的架构中，控制平面与数据平面应明确分离：
+
+#### 控制平面职责
+
+- 维护 DSL、路由、策略、灰度、证书、版本信息
+- 提供 UI/API/CLI 管理能力
+- 负责配置审批、版本管理、审核和撤销
+- 将配置下发到网关实例
+
+#### 数据平面职责
+
+- 负责请求接入、过滤器治理、路由和调用
+- 负责观测数据上报
+- 负责本地轻量缓存和请求处理
+- 仅接收并执行已验证的配置，不直接决定业务策略设计
+
+这种拆分使网关在规模扩展时更容易治理、审计和升级。
+
+### 9. DSL 设计与配置管理
+
+配置采用声明式 DSL，配置内容通过规范结构表达治理策略，便于管理和版本化。
+
+设计目标：
+
+- 可读性强：配置以声明式、可审阅方式表达
+- 可热更新：不需要重启网关即可生效
+- 可回滚：保留版本历史，支持快速回滚
+- 可校验：在下发前进行 schema 校验和语义校验
+
+### 10. 安全与合规
+
+额外安全设计：
+
+- 认证加密：mTLS / TLS / JWT / signed request
+- 密钥与证书管理：集中管理，支持轮换
+- 日志脱敏：覆盖 token、密码、身份证等敏感字段
+- API 访问审计：配置变更、授权操作、异常熔断都会留下 audit log
+- 风险控制：对异常请求量、异常路由、暴力请求做回收与报警
+
+### 11. 运行机制与运维
+
+对于网关运行，除了程序设计，本身也需要具备标准化的运维模型：
+
+- 配置审批：对关键 route/policy 下发必须通过审批
+- 灰度发布：先小流量验证，再逐步扩大
+- 自动化告警：监控不稳定时主动触发回滚或限流
+- 事件审计：所有更改、熔断、限流必须具备审计链路
+
+### 12. 典型应用场景
+
+#### 场景一：外部 HTTP API 接入
+
+客户端通过网关访问后端微服务，流程如下：
+
+- Pre 阶段生成 trace_id 和统一请求上下文
+- Route 阶段选择后端服务
+- Invoke 阶段做鉴权、参数校验、限流
+- 下游返回后，Post 阶段统一输出访问日志与 metrics
+
+#### 场景二：AI 模型服务接入
+
+针对 AI pipeline：
+
+- 用户发起推理请求
+- 网关进行鉴权、参数校验、prompt 长度检查
+- 请求进入任务队列，网关立即返回任务状态或请求 ID
+- 后台 worker 调用模型服务，返回结果后统一落库并完成 trace 结束
+- 网关提供结果查询、重试和失败兜底
+
+#### 场景三：灰度发布
+
+在服务升级中，控制平面通过 DSL 配置灰度策略：
+
+- 仅 5% 用户流量命中 v2 service
+- 监控 P95、错误率与异常事件
+- 测量稳定后逐步提升至 50% / 100%
+- 若异常则进行一键回滚
+
+## 参考文档
+
+- [路由设计](./ROUTING.md)
+- [DSL设计](../pkg/mk/README.md)
+- [运维手册](./OPERATIONS.md)
