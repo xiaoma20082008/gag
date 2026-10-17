@@ -1,13 +1,12 @@
-# 运维手册（OPERATIONS.md）
+# 运维手册
 
 本手册面向平台 SRE 与运维团队，包含部署、健康检查、配置下发与回滚、监控与告警、故障处理与演练指南。
 
 ## 部署建议
 
-- 平台：Kubernetes（优先推荐），也支持 VM/裸机多实例部署。
+- 平台：Kubernetes，也支持 VM/裸机多实例部署。
 - Data Plane：作为 Deployment，跨多个 AZ 部署多个副本；使用 HPA（基于 CPU / requests_in_flight / 自定义指标）。
 - Control Plane：高可用部署（至少 3 节点），持久化配置与审计用数据库（Postgres 等）。
-- 网络：使用 mTLS 加固 Control Plane 与 Data Plane 通信，Ingress/LoadBalancer 处理外部流量。
 
 ## 健康检查
 
@@ -17,7 +16,7 @@
 
 ## 配置下发与热加载流程（运维步骤）
 
-1. 本地编辑 DSL 并在控制平面执行 schema 校验。
+1. 在控制平面编辑 DSL 并执行 schema 校验。
 2. Dry-run：在控制平面选择 subset 节点进行 canary 下发（例如 5% 的实例）。
 3. 监控 canary 指标（error_rate, latency, downstream_errors）30 分钟。
 4. 若通过则全量下发；若异常，执行回滚并排查。
@@ -33,6 +32,7 @@
 ## 监控指标与仪表盘
 
 必备指标：
+
 - requests_total{route,instance,status}
 - request_duration_seconds{route,quantile}
 - upstream_request_duration_seconds{service}
@@ -42,6 +42,7 @@
 - config_version_applied{instance}
 
 建议 Dashboard：
+
 - 总流量与 QPS 面板
 - 按 route 的 P50/P95/P99 latency
 - 熔断/限流触发面板
@@ -62,7 +63,7 @@
 - 日志去敏：遵循 PII 列表掩码规则，在 DSL/global 中配置需要脱敏的字段。
 - Trace：OpenTelemetry，采样 & tag（route、service_version）需可配置。
 
-## 故障处理（常见场景）
+## 故障处理
 
 1. 下游错误率暴增
    - 检查熔断器状态与历史变化
@@ -98,14 +99,7 @@
 - 访问日志保留策略：配置化（例如 30 天/90 天），并对敏感字段做脱敏
 - 密钥管理：使用 Vault 管理私钥与 secret，控制平面负责 secrets 分发
 
-## 运维常用命令与排查清单（示例）
-
-- 查看实例健康：kubectl get pods -l app=gateway -o wide
-- 查看实例日志：kubectl logs <pod>
-- 查看配置版本：curl http://<gateway>/admin/config-version
-- 强制回滚：通过控制台或 API 下发旧版本
-
-## 发布与灰度流程（SRE 建议）
+## 发布与灰度流程
 
 1. 本地验证 DSL 与静态检查
 2. CI 执行 lint + schema 校验
@@ -130,7 +124,3 @@ A: 在 route 上明确配置 retry 策略，并仅对幂等方法启用重试。
 - 将网关与 Service Mesh 对接以统一观测与安全策略
 - 引入 ML 驱动流量预测与自动调节
 - 扩展 DSL 表达能力（更复杂条件、时间窗、地理规则）
-
----
-
-请把此文档作为运维与 SRE 的参考模板，根据实际生产环境与组织流程调整阈值、采样率与回滚策略。
