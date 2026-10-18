@@ -10,16 +10,10 @@ import (
 	"gag/internal/core"
 )
 
-// StaticDiscoveryClient 从配置里写死的清单提供实例。
-//
-// 用于本地开发与单机部署：没有注册中心时也要能把链路跑通。
-// 实例自带 tenant/service/cluster 三跳定位，查找时按三元组过滤——
-// 不能返回全部实例，否则负载均衡会把流量打到别的服务上。
 type StaticDiscoveryClient struct {
 	byKey map[string][]*core.Instance
 }
 
-// NewStaticDiscoveryClient 编译静态实例清单。
 func NewStaticDiscoveryClient(cfg *config.DiscoveryClientConfig) *StaticDiscoveryClient {
 	c := &StaticDiscoveryClient{byKey: map[string][]*core.Instance{}}
 	if cfg == nil {
@@ -40,15 +34,16 @@ func (c *StaticDiscoveryClient) DiscoverInstances(_ context.Context, tenant, ser
 	return c.byKey[instanceKey(tenant, service, cluster)], nil
 }
 
-// Warm 对静态来源是空操作：查的是内存，没有冷启动问题。
 func (c *StaticDiscoveryClient) Warm(context.Context, string, string, string) error { return nil }
+
+func (c *StaticDiscoveryClient) Name() string { return "static" }
+
+func (c *StaticDiscoveryClient) Close() error { return nil }
 
 func instanceKey(tenant, service, cluster string) string {
 	return tenant + "/" + service + "/" + cluster
 }
 
-// newInstance 把 host:port 拆成 Instance；地址非法时跳过而不是 panic，
-// 配置校验已经拦过一次，这里只是防御性处理。
 func newInstance(addr string, weight int) (*core.Instance, bool) {
 	host, portStr, err := net.SplitHostPort(addr)
 	if err != nil {

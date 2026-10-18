@@ -68,10 +68,13 @@ func (client *NacosDiscoveryClient) Warm(ctx context.Context, tenant, service, c
 	return err
 }
 
-// isNoInstanceErr 判断错误是否只是"服务下没有实例"。
-//
-// SDK 把这种情况也走 error 返回，但它不是基础设施故障：
-// 监控上应当表现为"某集群没有实例"，而不是"注册中心挂了"。
+func (client *NacosDiscoveryClient) Name() string { return "nacos" }
+
+func (client *NacosDiscoveryClient) Close() error {
+	client.sdk.CloseClient()
+	return nil
+}
+
 func isNoInstanceErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "instance list is empty")
 }

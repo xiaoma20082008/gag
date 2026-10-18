@@ -25,7 +25,7 @@ func main() {
 
 func run() error {
 	configType := flag.String("t", "file", "配置中心类型")
-	configMeta := flag.String("m", "configs/gateway.yaml", "配置中心路径")
+	configMeta := flag.String("m", "/Users/machunxiao/Workspace/gag/configs/gateway.yaml", "配置中心路径")
 	flag.Parse()
 
 	cfg := &config.ConfigClientConfig{

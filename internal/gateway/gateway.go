@@ -224,11 +224,6 @@ func (g *Gateway) Start() error {
 	return nil
 }
 
-// Wait 阻塞到 ctx 取消或任一监听器退出。
-//
-// 返回 nil 表示是正常退出（ctx 取消）；返回错误表示端口自己挂了。
-// ctx 取消不打日志——调用方比这里更清楚"为什么停"（信号名、上游
-// 取消、测试结束），由它自己记一行更准确，也避免重复。
 func (g *Gateway) Wait(ctx context.Context) error {
 	if g.errCh == nil {
 		return errors.New("gateway: 尚未启动")
@@ -256,14 +251,13 @@ func (g *Gateway) Run(ctx context.Context) error {
 // Close 优雅停机：先停热加载，再并行关闭两个端口。
 func (g *Gateway) Close() error {
 	g.closeOnce.Do(func() {
-		// 1. 先断掉两路配置来源：停机过程中再落地一份新配置，
-		//    日志会指向一个正在关闭的服务，排查时全是噪音。
+		// 1. 关闭配置。
 		g.stopWatcher()
 		if g.cc != nil {
 			// 等轮询 goroutine 真正退出，避免它回调到已停的数据面。
 			_ = g.cc.Close()
 		}
-		// 2. 再并行关闭两个端口。
+		// 2. 关闭服务。
 		ctx, cancel := context.WithTimeout(context.Background(), g.shutdownTimeout())
 		defer cancel()
 		// 3.
