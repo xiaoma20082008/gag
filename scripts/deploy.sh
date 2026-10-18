@@ -73,7 +73,7 @@ up)
 	compose up -d nacos redis mysql
 	wait_ready http://127.0.0.1:8848/nacos/ || true
 	echo "依赖已启动。宿主机上运行网关："
-	echo "  go run ./cmd/main -config configs/gateway.yaml"
+	echo "  go run ./cmd/main -c configs/gateway.yaml"
 	;;
 down)
 	require_docker

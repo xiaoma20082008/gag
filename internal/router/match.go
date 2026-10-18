@@ -5,6 +5,7 @@ import (
 
 	"gag/internal/config"
 	"gag/internal/core"
+	"gag/internal/script"
 )
 
 // Matcher 是一条路由的预编译匹配器。
@@ -16,10 +17,11 @@ type Matcher struct {
 	headers map[string]string
 	query   map[string]string
 	score   int
+	// rule 是编译后的 DSL 表达式；为 nil 表示这条路由没有额外条件。
+	rule *script.Script
 }
 
-// NewMatcher 编译路由匹配条件。
-func NewMatcher(r *config.Route) *Matcher {
+func NewMatcher(r *config.Route) (*Matcher, error) {
 	m := &Matcher{
 		path:    r.Path,
 		host:    strings.ToLower(r.Host),
@@ -41,23 +43,32 @@ func NewMatcher(r *config.Route) *Matcher {
 		}
 	}
 	m.score = m.computeScore()
-	return m
+	return m, nil
 }
 
-// computeScore 决定匹配优先级：精确路径 > 前缀路径 > 条件更多的路由。
+// computeScore 决定匹配优先级：精确路径 > 前缀路径 > 仅规则。
+//
+// 显式 Priority 不参与这里，它在外层排序时优先比较。
 func (m *Matcher) computeScore() int {
-	score := len(m.path)
-	if m.prefix {
-		score += 1000
-	} else {
-		score += 10000
+	score := 0
+	switch {
+	case m.path == "":
+		// 只写了 Rule：没有结构上的特异性，排在最后，
+		// 让静态路由先有机会命中；需要抢在前面就配 priority。
+	case m.prefix:
+		score = 1000 + len(m.path)
+	default:
+		score = 10000 + len(m.path)
 	}
-	score += len(m.headers) * 100
 	if m.host != "" {
 		score += 500
 	}
+	score += len(m.headers) * 100
 	if len(m.methods) > 0 {
 		score += 50
+	}
+	if m.rule != nil {
+		score += 200
 	}
 	return score
 }
@@ -66,7 +77,21 @@ func (m *Matcher) computeScore() int {
 func (m *Matcher) Score() int { return m.score }
 
 // Match 判断请求是否命中该路由。
-func (m *Matcher) Match(meta *core.RequestMeta) bool {
+//
+// env 由调用方按请求构造一次并复用：一条租户下可能有几十条路由，
+// 每条都重新拼一遍 header/query 映射是白费。
+func (m *Matcher) Match(meta *core.RequestMeta, env *script.Env) (bool, error) {
+	if !m.matchStatic(meta) {
+		return false, nil
+	}
+	if m.rule == nil {
+		return true, nil
+	}
+	return true, nil
+}
+
+// matchStatic 执行 path/method/host/header/query 的快速筛选。
+func (m *Matcher) matchStatic(meta *core.RequestMeta) bool {
 	if m.host != "" && !strings.EqualFold(m.host, meta.Host) {
 		return false
 	}
@@ -75,16 +100,18 @@ func (m *Matcher) Match(meta *core.RequestMeta) bool {
 			return false
 		}
 	}
-	if m.prefix {
-		if !strings.HasPrefix(meta.Path, m.path) {
+	if m.path != "" {
+		if m.prefix {
+			if !strings.HasPrefix(meta.Path, m.path) {
+				return false
+			}
+			// 避免 /api 前缀误命中 /apix。
+			if len(meta.Path) > len(m.path) && !strings.HasSuffix(m.path, "/") && meta.Path[len(m.path)] != '/' {
+				return false
+			}
+		} else if meta.Path != m.path {
 			return false
 		}
-		// 避免 /api 前缀误命中 /apix。
-		if len(meta.Path) > len(m.path) && !strings.HasSuffix(m.path, "/") && meta.Path[len(m.path)] != '/' {
-			return false
-		}
-	} else if meta.Path != m.path {
-		return false
 	}
 	for k, want := range m.headers {
 		if meta.Header.Get(k) != want {

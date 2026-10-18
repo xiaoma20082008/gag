@@ -3,6 +3,8 @@ package config
 import (
 	"encoding/json/v2"
 	"fmt"
+	"net"
+	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -91,6 +93,17 @@ type Server struct {
 
 // ServerConfig 数据面配置
 type ServerConfig struct {
+	Host string
+	Port int
+
+	// ReadHeaderTimeout 只约束请求头，防止慢速 header 攻击。
+	ReadHeaderTimeout time.Duration
+	// IdleTimeout 约束 keep-alive 空闲连接。
+	IdleTimeout time.Duration
+	// ShutdownTimeout 是优雅停机的最长等待时间。
+	ShutdownTimeout time.Duration
+
+	MaxHeaderSize int
 }
 
 // AdminConfig 控制面配置
@@ -116,7 +129,8 @@ type LoadBalancerConfig struct {
 // DiscoveryClientConfig 注册中心客户端配置
 type DiscoveryClientConfig struct {
 	// Type 决定实例来源：static（配置写死）、nacos、consul。
-	Type    string `yaml:"type" json:"type"`
+	Type string `yaml:"type" json:"type"`
+	// Address 是 "host:port" 的紧凑形式，Host/Port 分开写更显式。
 	Host    string `yaml:"host" json:"host"`
 	Port    int    `yaml:"port" json:"port"`
 	Address string `yaml:"address" json:"address"`
@@ -132,6 +146,90 @@ type DiscoveryClientConfig struct {
 	TimeoutMs int `yaml:"timeout_ms" json:"timeout_ms"`
 	// Instances 是 type=static 时的实例清单。
 	Instances []StaticInstance `yaml:"instances" json:"instances"`
+}
+
+// ConfigClientConfig 配置中心客户端配置
+type ConfigClientConfig struct {
+	// Type 决定配置来源：file（本地文件）、nacos、apollo。
+	Type string `yaml:"type" json:"type"`
+	// Path 是 type=file 时的配置文档路径，同时作为默认 key。
+	Path string `yaml:"path" json:"path"`
+	// Format 是文档格式 yaml|json；为空时按 Path（或 key）的扩展名推断。
+	Format string `yaml:"format" json:"format"`
+	// Interval 是 type=file 的轮询间隔，默认 1s。
+	// 用轮询而不是 fsnotify：容器里挂载的 ConfigMap 更新时 mtime 变化、
+	// inode 替换等各种情形不一致，轮询比较内容反而最稳。
+	Interval Duration `yaml:"interval" json:"interval"`
+	// Address 是 "host:port" 的紧凑形式，Host/Port 分开写更显式。
+	Host    string `yaml:"host" json:"host"`
+	Port    int    `yaml:"port" json:"port"`
+	Address string `yaml:"address" json:"address"`
+	// Namespace 是注册/配置中心的命名空间（nacos 的 namespaceId）。
+	Namespace string `yaml:"namespace" json:"namespace"`
+	// Group 是配置分组，nacos 默认 DEFAULT_GROUP。
+	Group string `yaml:"group" json:"group"`
+	// DataId 是默认配置文档标识；Get 的 key 为空时用它。
+	DataId string `yaml:"data_id" json:"data_id"`
+	// Protocol 是配置中心协议，nacos 支持 http/https；默认 http。
+	Protocol string `yaml:"protocol" json:"protocol"`
+	// RootPath 是配置中心的上下文路径（nacos 的 ContextPath，默认 /nacos）。
+	RootPath string `yaml:"root_path" json:"root_path"`
+	// LogLevel 是 SDK 自己的日志级别：debug|info|warn|error，默认 warn。
+	LogLevel string `yaml:"log_level" json:"log_level"`
+	// TimeoutMs 是单次拉取超时，默认 5000 毫秒。
+	TimeoutMs int `yaml:"timeout_ms" json:"timeout_ms"`
+}
+
+// Endpoint 统一 address 与 host/port 两种写法，与 DiscoveryClientConfig 保持一致。
+func (c *ConfigClientConfig) Endpoint() (host string, port int, err error) {
+	if c == nil {
+		return "", 0, fmt.Errorf("config client: 配置为 nil")
+	}
+	if c.Address != "" {
+		h, p, splitErr := net.SplitHostPort(c.Address)
+		if splitErr != nil {
+			return "", 0, fmt.Errorf("config client: address %q 需要 host:port 形式: %w", c.Address, splitErr)
+		}
+		n, convErr := strconv.Atoi(p)
+		if convErr != nil || n <= 0 || n > 65535 {
+			return "", 0, fmt.Errorf("config client: address %q 的端口非法", c.Address)
+		}
+		return h, n, nil
+	}
+	if c.Host == "" {
+		return "", 0, fmt.Errorf("config client: 缺少 address（或 host/port）")
+	}
+	if c.Port <= 0 || c.Port > 65535 {
+		return "", 0, fmt.Errorf("config client: host %q 的 port %d 非法", c.Host, c.Port)
+	}
+	return c.Host, c.Port, nil
+}
+
+// Endpoint 解析注册中心地址，兼容 address 与 host/port 两种写法。
+//
+// 配置校验与客户端构造都调它，保证"校验通过的配置一定能构造出客户端"。
+func (d *DiscoveryClientConfig) Endpoint() (host string, port int, err error) {
+	if d == nil {
+		return "", 0, fmt.Errorf("discovery: 配置为 nil")
+	}
+	if d.Address != "" {
+		h, p, splitErr := net.SplitHostPort(d.Address)
+		if splitErr != nil {
+			return "", 0, fmt.Errorf("discovery: address %q 需要 host:port 形式: %w", d.Address, splitErr)
+		}
+		n, convErr := strconv.Atoi(p)
+		if convErr != nil || n <= 0 || n > 65535 {
+			return "", 0, fmt.Errorf("discovery: address %q 的端口非法", d.Address)
+		}
+		return h, n, nil
+	}
+	if d.Host == "" {
+		return "", 0, fmt.Errorf("discovery: 缺少 address（或 host/port）")
+	}
+	if d.Port <= 0 || d.Port > 65535 {
+		return "", 0, fmt.Errorf("discovery: host %q 的 port %d 非法", d.Host, d.Port)
+	}
+	return d.Host, d.Port, nil
 }
 
 // StaticInstance 是一条静态实例声明，需要自带租户/服务/集群定位——
@@ -182,11 +280,23 @@ type Service struct {
 // Route 是租户空间内的一条匹配规则。
 type Route struct {
 	ID      string            `yaml:"id" json:"id"`
-	Path    string            `yaml:"path" json:"path"` // /v1/orders 或 /v1/orders/*（前缀匹配）
+	Path    string            `yaml:"path" json:"path"` // /v1/orders 或 /v1/orders/*（前缀匹配）；只写 Rule 时可省略
 	Methods []string          `yaml:"methods" json:"methods"`
 	Host    string            `yaml:"host" json:"host"`
 	Headers map[string]string `yaml:"headers" json:"headers"`
 	Query   map[string]string `yaml:"query" json:"query"`
+
+	// Rule 是路由匹配的 DSL 表达式，启动时编译一次，请求期只做求值。
+	// 例如：http.method == "POST" && matches(http.path, "^/v1/orders/[0-9]+$")
+	//
+	// 与 Path/Methods/Host/Headers/Query 是"与"关系：静态字段先做快速筛选，
+	// 通过之后再求值 Rule。需要表达这些字段写不出来的条件（IP 网段、
+	// 多值枚举、变量提取结果）时才用 Rule。
+	Rule string `yaml:"rule" json:"rule"`
+
+	// Priority 是同一租户内多条路由同时命中时的优先级，大的先匹配。
+	// 0 表示按结构排序（精确路径 > 前缀路径 > 仅 Rule）。
+	Priority int `yaml:"priority" json:"priority"`
 
 	// Cluster 是默认目标集群
 	Cluster string   `yaml:"cluster" json:"cluster"`

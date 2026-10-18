@@ -171,6 +171,9 @@ func mapLookupError(c *core.RequestContext, err error) error {
 		// 注册中心不可达/超时：不是本请求的问题，是基础设施故障，
 		// 与"没有实例"（容量问题）区分开。
 		return gerr.New(gerr.CodeBadGateway, "实例来源查询失败").WithCause(err)
+	case errors.Is(err, core.ErrRouteEval):
+		// 规则求值失败是配置问题：报 500 而不是 404，
+		return gerr.New(gerr.CodeInternal, "路由规则求值失败").WithCause(err)
 	default:
 		return gerr.New(gerr.CodeInternal, "查找失败").WithCause(err)
 	}

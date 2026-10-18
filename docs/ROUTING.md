@@ -78,15 +78,15 @@ Tenant 来源优先级建议：
 在 tenant 空间内查找 route 匹配规则，确定具体 Service：
 
 - 通过 path、method、header、host、query 匹配
-- 通过 service alias、route rule、标签匹配
-- 若存在多个服务匹配，则按照优先级、namespace、version 规则裁定
+- 通过 rule 表达式匹配（DSL，见 §6.3）
+- 若存在多个服务匹配，则按 priority、结构特异性裁定
 
 Service 允许实现：
 
-- 静态 route
-- 动态 route（控制平面下发）
-- 模板 route（变量化规则）
-- 版本 route（v1/v2/canary）
+- 静态 route（path/methods/host/headers/query）
+- 动态 route（控制平面下发，热替换整份快照）
+- 规则 route（rule 表达式，表达静态字段写不出的条件）
+- 版本 route（v1/v2/canary，用 rule + priority 指向不同 cluster）
 
 #### Step 3：Cluster 获取
 
@@ -98,7 +98,8 @@ Cluster 选择策略：
 
 - 默认按 region / zone / lane 选择
 - 若 zone 健康不佳，可 fallback 到同 region 的其他 cluster
-- 若配置存在灰度策略，则在 cluster 选择前应用 traffic split
+- 灰度分流在 route 阶段就已决定目标 cluster：命中灰度规则的路由直接写
+  灰度 cluster，不在这里再做二次分流（见 §8）
 
 #### Step 4：Instance 选择
 
@@ -215,60 +216,156 @@ Instance 表象征实际后端单点。参考字段：
 
 ### 6.1 匹配顺序
 
-请求路由匹配一般按下面顺序：
+查找分两个阶段，中间隔着"认证"这道墙：
 
-1. tenant 识别
-2. route rule 匹配
-3. service selection
-4. cluster filtering
-5. instance selection
-6. failover / fallback
+**阶段一（route 期，`router.Table.ResolveRoute`，纯内存）**
+
+1. tenant 识别（未带租户则回落 `server.default_tenant`）
+2. 在租户的路由表里按排序逐条试匹配：
+   - 静态字段快速筛选：host → methods → path → headers → query
+   - 静态字段全过之后才求值 rule（DSL）
+3. 命中即返回 `Decision{Service, RouteID, Route, ServiceCfg}`
+
+排序规则（建表时算好，查找时不再比较）：
+
+- 先比 `priority`，大的在前
+- `priority` 相同时比结构特异性得分：
+  精确路径（10000+长度）> 前缀路径（1000+长度）> 仅 rule（0 基分）
+- 同分时保持配置书写顺序（`sort.SliceStable`）
+
+**阶段二（invoke 期，`discovery.Resolver.Resolve`，每次尝试都重解析）**
+
+4. cluster 过滤（region / version / 健康）
+5. instance 选择（lb：round_robin / random / least_conn / consistent_hash）
+6. 失败则按 retry 策略重试——**重试会重新走 4-5**，因此换节点是天然行为，
+   不需要额外的 failover 逻辑
+
+之所以拆成两段：认证、限流、熔断都按路由配置，必须先知道路由才知道该用
+哪套策略；而实例列表是运行时数据，进不了启动期的路由表，且重试必须能换节点。
 
 ### 6.2 伪代码示例
 
 ```text
-func Route(req Request) (Instance, error) {
-    tenant := ResolveTenant(req)
-    if tenant == nil {
-        return error("tenant_not_found")
-    }
+// 阶段一：route 期，内存查表
+func ResolveRoute(meta) (Decision, error) {
+    tenant := meta.Tenant or defaultTenant
+    routes := table[tenant]                  // 已按 priority/score 排好序
+    if routes == nil { return tenant_not_found }
 
-    service := MatchService(tenant, req)
-    if service == nil {
-        return error("service_not_found")
-    }
-
-    cluster := SelectCluster(service, req)
-    if cluster == nil {
-        return error("cluster_unavailable")
-    }
-
-    instance := SelectInstance(cluster, req)
-    if instance == nil {
-        if cluster.HasFallback() {
-            return SelectFallback(cluster.FallbackCluster, req)
+    env := buildDSLEnv(meta)                 // 每个请求构造一次，租户下复用
+    for r := range routes {
+        if !r.matchStatic(meta) { continue } // 廉价字段先筛
+        if r.rule != nil {
+            ok, err := r.rule.Match(env)
+            if err != nil { return route_eval_failed }  // 500，不是 404
+            if !ok { continue }
         }
-        return error("instance_unavailable")
+        return Decision{Service: r.svc, Cluster: r.cluster, Route: r}
     }
+    return route_not_found
+}
 
-    return instance, nil
+// 阶段二：invoke 期，每次尝试都重新解析
+func Resolve(decision, attempt) (Instance, error) {
+    nodes := discover(tenant, service, decision.Cluster)
+    healthy := filter(nodes, healthy)
+    if len(healthy) == 0 { return unavailable }   // 503
+    return lb.Select(healthy, key)
 }
 ```
 
-### 6.3 动态路由规则
+### 6.3 路由规则 DSL
 
-动态路由支持以下能力：
+`rule` 是一个布尔表达式，**在配置加载期编译一次**，请求期只做求值。
 
-- 配置版本切换
-- 灰度中 key-based routing
-- 可对 cluster 做在运行时切换
-- route 规则更新不需重启当前实例
+编译期做的事（不是请求期）：
 
-设计建议：
+- 词法 / 语法分析
+- 静态类型检查（字符串和整数比较直接报错，不做隐式转换）
+- `matches()` 的正则 `regexp.Compile`
+- `cidr()` 的 `netip.ParsePrefix`
 
-- 支持版本号控制（version / revision）
-- 只允许“已校验、不冲突”的配置版本落地
-- 路由表更新采用 copy-on-write / atomic swap
+请求期做的事：AST 求值 + map 查找。没有正则编译，没有前缀解析。
+
+**环境变量**
+
+| 写法 | 含义 |
+| --- | --- |
+| `http.method` / `http.path` / `http.host` | 请求行与 Host |
+| `http.client_ip` | 客户端 IP（已过 IP 中间件，可能为空） |
+| `http.tenant` | 租户，路由前由 `X-Tenant` / 默认租户定好，**可用** |
+| `http.header["X-Foo"]` | 请求头，大小写不敏感 |
+| `http.query["a"]` | 查询参数 |
+| `http.cookie["c"]` | Cookie |
+| `http.user` / `http.region` / `vars[...]` | **路由期恒为空**，见下 |
+
+> **求值时机陷阱**：路由规则在 `found_route` 求值，认证在 `after_route` 才跑。
+> 所以 `http.user`、`http.region` 在路由期永远是空串，
+> 依赖它们的规则**静默不命中**且不报错。要按身份分流，用认证前就存在的
+> 请求头（如 `X-Canary`），或把判断挪到 `after_route` 的模块里。
+>
+> `vars[...]` 同理：`config.InboundRequest.VarsMapping` 还没接进查找链，
+> `Route` 上也没有对应字段。语法先支持，等 VarsMapping 落地后不用改语法。
+
+**谓词**
+
+| 谓词 | 说明 |
+| --- | --- |
+| `startsWith(s, sub)` / `endsWith(s, sub)` / `contains(s, sub)` | 子串判断 |
+| `matches(s, 're')` | 正则，第二参数必须是字符串字面量 |
+| `cidr(ip, '10.0.0.0/8')` | 网段，第二参数必须是字符串字面量 |
+| `in(s, 'a', 'b', ...)` | 枚举，等价于一长串 `\|\|` |
+
+**运算符**：`!` > `&&` > `||` > 比较（`==` `!=` `>` `>=` `<` `<=`）。
+不支持链式比较（`a == b == c` 编译报错）。
+
+**示例**
+
+```yaml
+- id: order.get.canary
+  rule: 'http.header["X-Canary"] == "true"'
+  methods: [GET]
+  priority: 10
+  cluster: order-service-canary
+
+- id: order.get.internal
+  rule: 'matches(http.path, "^/v1/orders/[0-9]+/(audit|replay)$") && cidr(http.client_ip, "10.0.0.0/8")'
+  methods: [GET]
+  priority: 5
+  cluster: order-service-hz
+```
+
+**设计取舍**
+
+- **不做隐式类型转换**：`http.path == 123` 是编译错误而不是永远 false。
+  一条永远为假的规则在线上表现成"路由不存在"，排查成本极高。
+- **求值失败返回 500**（`core.ErrRouteEval`），不是 404。坏规则不该
+  伪装成"路由没配"。
+- **`cidr()` 遇到脏 IP 返回 false 而不报错**：请求数据不可信，
+  但这不是配置错误。
+- **规则只写条件，不写动作**：目标 cluster 是路由的静态字段。
+  规则里没有"改写 path""设置 header"这类副作用，那些属于 transformer。
+
+实现见 `internal/dsl/`；`pkg/mk` 是另一套面向网关脚本的运行时，
+其 AST 解释器目前是桩（`MKRuntime.Eval` 返回 `ErrRuntimeUnavailable`），
+不能用来求值路由规则。
+
+### 6.4 配置热更新
+
+路由表是 `config.Snapshot` 的派生物，跟随快照整体替换：
+
+1. 新配置先过 `Validate`（含 `dsl.Check` 逐条编译规则）
+2. 通过后构建新 `Table`（第二次编译，防止绕过加载期校验）
+3. 原子替换指针，旧表由 GC 回收
+
+因此不存在"新配置生效一半"的中间态，也不需要读写锁：
+查找路径上没有写操作，读到的一定是某一份完整配置。
+
+版本控制：
+
+- `Snapshot.Version()` 由配置里的 `version` 字段或内容哈希前 12 位给出
+- `Snapshot.Hash()` 是内容的 sha256，用于判断"这次下发到底变没变"
+- 规则编译失败的下发在步骤 1 就被拒绝，不会落地
 
 ---
 
@@ -330,16 +427,41 @@ Cluster 方案中，支持：
 
 ### 8.2 实现方式
 
-推荐在 Route 或 cluster 选择前执行 filter：
+分流分两层，**路由级只做"确定性"分流，百分比分流交给 lb**：
 
-- route 评估：match rule -> choose candidate cluster
-- traffic split：基于 hash / percentage / rule 计算 target cluster
+**路由级（确定性）**：同一 service 下配两条路由，灰度那条写 rule + priority。
+
+```yaml
+routes:
+  - id: order.get.canary
+    rule: 'http.header["X-Canary"] == "true"'
+    methods: [GET]
+    priority: 10          # 压过下面的前缀路由
+    cluster: order-service-canary
+
+  - id: order.get
+    path: /v1/orders/*
+    methods: [GET]
+    cluster: order-service-hz
+```
+
+为什么不靠结构分：仅 rule 的路由没有 path，结构分是 0 基分，
+不写 priority 就永远排在 `/v1/orders/*` 后面，灰度不会生效。
+这是最容易踩的坑，`TestPriorityBeatsStructuralScore` 专门守着它。
+
+**lb 级（百分比）**：把两个版本的实例放进同一个 cluster，
+用实例权重分流（nacos 的 `weight` 或静态配置的 `weight`）。
+`internal/lb` 的 round_robin / random / least_conn 都按权重归一。
+
+**没有路由级 split**：一条请求只能落到一个 cluster，
+`Route.Cluster` 是单值。要表达"5% 走 canary"就在 lb 层给实例配权重，
+而不是在路由层做加权随机——后者会让同一请求在重试时可能换版本。
 
 必须保证：
 
-- 记录分流命中信息（route version / split rule）
-- 在 metrics 与 trace 中展示区分
-- 支持回滚至上一版 cluster
+- 记录分流命中信息（route id / priority / cluster / version）
+- 在 metrics 与 trace 中展示区分（按 route id 打 label）
+- 支持回滚：把灰度路由删掉或把 priority 归零即回到全量旧版本
 
 ---
 

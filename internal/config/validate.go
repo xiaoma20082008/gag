@@ -135,10 +135,16 @@ func Validate(c *Config) error {
 				routeIDs[r.ID] = fmt.Sprintf("%s/%s", t.Name, s.Name)
 				rwhere = fmt.Sprintf("%s.route(%s)", swhere, r.ID)
 
-				if r.Path == "" {
-					errs.add("%s.path 不能为空", rwhere)
-				} else if !strings.HasPrefix(r.Path, "/") {
+				// 静态字段与 Rule 至少要有一样：两者都空的路由会匹配所有请求，
+				// 那是配置事故而不是"默认路由"。
+				if r.Path == "" && r.Rule == "" {
+					errs.add("%s.path 与 rule 至少要有一个", rwhere)
+				}
+				if r.Path != "" && !strings.HasPrefix(r.Path, "/") {
 					errs.add("%s.path 必须以 / 开头", rwhere)
+				}
+				if r.Priority < 0 {
+					errs.add("%s 的 priority 不能为负", rwhere)
 				}
 				for _, m := range r.Methods {
 					switch strings.ToUpper(m) {
@@ -229,6 +235,9 @@ func validateDiscovery(errs *ValidationError, d *DiscoveryClientConfig, known ma
 // 这些字段直接进 SDK 的 ClientConfig/ServerConfig，错值的表现是
 // SDK 内部报错或莫名其妙连不上，很难从网关侧定位，因此在入口拦掉。
 func validateNacosDiscovery(errs *ValidationError, d *DiscoveryClientConfig) {
+	if _, _, err := d.Endpoint(); err != nil {
+		errs.add("server.discovery: %v", err)
+	}
 	switch d.Protocol {
 	case "", "http", "https":
 	default:

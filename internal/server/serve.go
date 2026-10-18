@@ -19,9 +19,9 @@ func (s *GagServer) Start() error {
 		return err
 	}
 
-	if s.deps.Logger != nil {
+	if s.Logger != nil {
 		st := s.state.Load()
-		s.deps.Logger.Info("业务端口开始监听", map[string]any{
+		s.Logger.Info("业务端口开始监听", map[string]any{
 			"addr":    ln.Addr().String(),
 			"version": st.Snapshot().Version(),
 			"hash":    st.Snapshot().Hash()[:12],

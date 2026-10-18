@@ -2,7 +2,7 @@ package mk
 
 type AstInterp struct {
 	errors *DiagnosticBag
-	symtab *SymbolTable
+	env    *Env
 
 	returnVal  any
 	returnType *TypeDef
@@ -142,9 +142,7 @@ func (interp *AstInterp) VisitIf(n *IfStmt) (Node, error) {
 
 func (interp *AstInterp) VisitWhile(n *WhileStmt) (Node, error) {
 	n.Cond.Accept(interp)
-	interp.symtab.Enter("while")
 	n.Body.Accept(interp)
-	interp.symtab.Leave()
 	return n, nil
 }
 

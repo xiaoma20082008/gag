@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"gag/internal/config"
-	"gag/internal/proxy"
 	"gag/internal/telemetry/logging"
-	"gag/internal/telemetry/metrics"
 )
 
 const baseConfig = `
@@ -65,13 +63,8 @@ func newTestServerOn(t *testing.T, yaml string, port int) (*GagServer, *config.S
 
 	logger := logging.New(logging.Config{Level: logging.LevelError})
 	t.Cleanup(func() { _ = logger.Close() })
-	registry := metrics.NewRegistry()
 
-	s := NewGag(&ServerConfig{Host: "127.0.0.1", Port: port}, Deps{
-		Logger:   logger,
-		Metrics:  metrics.NewGateway(registry),
-		Invokers: proxy.NewRegistry(),
-	})
+	s := NewGag(&config.ServerConfig{Host: "127.0.0.1", Port: port})
 	return s, snap
 }
 

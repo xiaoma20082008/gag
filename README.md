@@ -8,7 +8,7 @@ An AI/API gateway written by Go
 gag/
 ├── cmd/
 │   └── main/
-│       └── main.go                  # 程序主入口：装载配置、装配治理链、双端口启动与优雅停机
+│       └── main.go                  # 程序主入口：解析参数、信号转 ctx、退出码（其余在 internal/gateway）
 ├── configs/
 │   └── gateway.yaml                 # 生产环境配置文件
 ├── internal/                        # 私有业务逻辑和核心模块（外部不可导入）
@@ -16,11 +16,19 @@ gag/
 │   │   ├── admin.go                 # 管理端口（AdminServer）
 │   │   ├── apis.go                  # 管理接口（探针 / 指标 / 配置发布与回滚）
 │   │   └── store.go                 # 配置版本、发布、回滚、订阅（Watch）
-│   ├── config/                      # 配置加载模块
-│   │   ├── config.go                # ConfigLoader 接口（YAML / JSON）+ 默认值
+│   ├── config/                      # 配置模块
+│   │   ├── client.go                # ConfigClient 接口（配置从哪来）+ 来源→快照流水线
+│   │   ├── file.go                  # 文件来源（轮询内容变化）
+│   │   ├── nacos.go                 # nacos 配置中心来源
+│   │   ├── loader.go                # 解析 / 默认值 / 校验（YAML + JSON 一条流水线）
 │   │   ├── types.go                 # 声明式 DSL 模型
 │   │   ├── validate.go              # 语义校验
 │   │   └── snapshot.go              # 不可变快照（数据面唯一输入）
+│   ├── gateway/                     # 进程装配：双端口 + 热加载 + 优雅停机
+│   │   ├── gateway.go               # Gateway 生命周期（New / Start / Wait / Run / Close）
+│   │   ├── watch.go                 # 两路配置变更订阅（控制面发布 + 来源变化）
+│   │   ├── listen.go                # 地址拆分、并行停机
+│   │   └── build.go                 # 构建标识（-ldflags 注入）
 │   ├── core/                        # 核心实现：请求生命周期契约
 │   │   ├── core.go                  # RequestContext、统一错误响应、请求体读取
 │   │   ├── hook.go                  # 回调点框架（HookPoint / Action / Callbacks / Module）
@@ -100,7 +108,7 @@ gag/
 ## 快速开始
 
 ```bash
-go run ./cmd/main -config configs/gateway.yaml   # 数据面 :8080，管理面 127.0.0.1:9090
+go run ./cmd/main -c configs/gateway.yaml -l info   # 数据面 :8080，管理面 127.0.0.1:9090
 curl -H 'X-API-Key: dev-key-1' http://127.0.0.1:8080/v1/orders/1
 curl http://127.0.0.1:9090/readyz
 ```

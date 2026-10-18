@@ -9,17 +9,10 @@ import (
 	"gag/internal/core"
 )
 
-// Table 是配置编译出的只读路由索引。
-//
-// 与 Snapshot 一一对应：配置变更时整体重建并原子替换，
-// 因此查找路径上不需要任何写锁，也不存在读到半份配置的窗口。
-//
-// 表里只有"请求属于哪条路由"：集群与实例是运行时数据，
-// 由调用期的 discovery.Resolver 解析，不进这张表。
 type Table struct {
-	version       string
-	defaultTenant string
-	tenants       map[string]*tenantNode
+	version string
+	tenant  string
+	tenants map[string]*tenantNode
 }
 
 type tenantNode struct {
@@ -28,14 +21,14 @@ type tenantNode struct {
 }
 
 type routeEntry struct {
-	id      string
-	cluster string
-	matcher *Matcher
-	cfg     *config.Route
-	svc     *config.Service
+	id       string
+	cluster  string
+	priority int
+	matcher  *Matcher
+	cfg      *config.Route
+	svc      *config.Service
 }
 
-// NewTable 从快照编译路由索引。
 func NewTable(snap *config.Snapshot) (*Table, error) {
 	if snap == nil || snap.Config() == nil {
 		return nil, errors.New("router: snapshot 为 nil")
@@ -43,9 +36,9 @@ func NewTable(snap *config.Snapshot) (*Table, error) {
 
 	cfg := snap.Config()
 	t := &Table{
-		version:       snap.Version(),
-		defaultTenant: snap.DefaultTenant(),
-		tenants:       make(map[string]*tenantNode, len(cfg.Tenants)),
+		version: snap.Version(),
+		tenant:  snap.DefaultTenant(),
+		tenants: make(map[string]*tenantNode, len(cfg.Tenants)),
 	}
 
 	for ti := range cfg.Tenants {
@@ -55,18 +48,27 @@ func NewTable(snap *config.Snapshot) (*Table, error) {
 			svcCfg := &tenantCfg.Services[si]
 			for ri := range svcCfg.Routes {
 				routeCfg := &svcCfg.Routes[ri]
+				matcher, err := NewMatcher(routeCfg)
+				if err != nil {
+					return nil, fmt.Errorf("router: %w", err)
+				}
 				tt.routes = append(tt.routes, &routeEntry{
-					id:      routeCfg.ID,
-					cluster: routeCfg.Cluster,
-					matcher: NewMatcher(routeCfg),
-					cfg:     routeCfg,
-					svc:     svcCfg,
+					id:       routeCfg.ID,
+					cluster:  routeCfg.Cluster,
+					priority: routeCfg.Priority,
+					matcher:  matcher,
+					cfg:      routeCfg,
+					svc:      svcCfg,
 				})
 			}
 		}
-		// 精确路径优先、条件更多的路由优先。
+		// 先比显式 priority，再比结构特异性（精确路径 > 前缀路径 > 仅规则）。
 		sort.SliceStable(tt.routes, func(i, j int) bool {
-			return tt.routes[i].matcher.Score() > tt.routes[j].matcher.Score()
+			a, b := tt.routes[i], tt.routes[j]
+			if a.priority != b.priority {
+				return a.priority > b.priority
+			}
+			return a.matcher.Score() > b.matcher.Score()
 		})
 		t.tenants[tenantCfg.Name] = tt
 	}
@@ -89,30 +91,6 @@ func (t *Table) RouteCount() int {
 }
 
 // ResolveRoute 路由期查找：租户 → 路由 → 服务。
-//
-// 只做内存匹配，不访问实例来源，因此可以在 found_route 回调点执行——
-// 认证、限流等治理模块都按路由配置，必须先知道路由才知道该用哪套策略。
 func (t *Table) ResolveRoute(meta *core.RequestMeta) (*core.Decision, error) {
-	tenantName := meta.Tenant
-	if tenantName == "" {
-		tenantName = t.defaultTenant
-	}
-	tt, ok := t.tenants[tenantName]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", core.ErrTenantNotFound, tenantName)
-	}
-
-	for _, r := range tt.routes {
-		if r.matcher.Match(meta) {
-			return &core.Decision{
-				Tenant:     tenantName,
-				Service:    r.svc.Name,
-				RouteID:    r.id,
-				Protocol:   r.svc.Protocol,
-				Route:      r.cfg,
-				ServiceCfg: r.svc,
-			}, nil
-		}
-	}
 	return nil, fmt.Errorf("%w: %s %s", core.ErrRouteNotFound, meta.Method, meta.Path)
 }

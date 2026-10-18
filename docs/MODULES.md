@@ -413,16 +413,21 @@ nacos/consul 这类注册中心——实例是运行时数据。旧 `internal/ro
 | 阶段 | 做什么 | 不做什么 |
 | --- | --- | --- |
 | `found_route`（内建 `Hooks.ResolveRoute` → `router.Table.ResolveRoute`） | 租户 → 路由 → 服务；只读内存索引，无 IO | 不定集群、不取实例、不查注册中心 |
-| `forward`（`mw_upstream` → `discovery.Resolver.Resolve`） | 灰度分流定集群 → `DiscoveryClient` 取实例 → lb 选择 | 不重复做路由匹配 |
+| `forward`（`mw_upstream` → `discovery.Resolver.Resolve`） | 取路由写死的集群 → `DiscoveryClient` 取实例 → lb 选择 | 不重复做路由匹配 |
 
 放在调用期的三个理由：
 
 1. **每次尝试重新查一次注册中心**：实例下线后，下一次重试自然落到别的节点，
    而不是死磕同一个连不通的地址（`pipeline_test` 用会"轮换"的来源验证）。
-2. **灰度分流需要认证后的身份**：`split.match.users` 按调用方稳定分流，
-   而身份要等 `after_route` 的 `mw_auth` 跑完才知道。放在路由期只能按 client_ip 退。
+2. **实例是运行时数据**：它不在配置里，进不了启动期构建的路由表。
+   路由表只回答"请求属于哪条路由"，集群名是路由的静态字段。
 3. **重试换节点是基本常识**：`Hooks.Forward` 每次尝试都由 `Chain.forward` 触发，
    查找链在调用期才能享受到这个时机。
+
+> 灰度分流已不在这一层：命中灰度规则的请求会匹配到另一条路由，
+> 那条路由自己写着 canary 集群（`rule` + `priority`）。
+> 因此 `core.SelectCluster` 现在只是读 `route.Cluster`，
+> 不再按 `meta` 二次分流——一条请求只对应一个集群，重试不会换版本。
 
 配套改动：
 

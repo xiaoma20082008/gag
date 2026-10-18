@@ -90,8 +90,10 @@ func NewNacosDiscoveryClient(cfg *config.DiscoveryClientConfig) (*NacosDiscovery
 	if cfg == nil {
 		return nil, fmt.Errorf("discovery: nacos 客户端配置为 nil")
 	}
-	if cfg.Host == "" {
-		return nil, fmt.Errorf("discovery: nacos 客户端配置缺少 host")
+	// address 与 host/port 两种写法在这里统一，校验层用的是同一个方法。
+	host, port, err := cfg.Endpoint()
+	if err != nil {
+		return nil, err
 	}
 	if cfg.TimeoutMs <= 0 {
 		cfg.TimeoutMs = defaultTimeoutMs
@@ -113,7 +115,7 @@ func NewNacosDiscoveryClient(cfg *config.DiscoveryClientConfig) (*NacosDiscovery
 		cc.LogLevel = "info"
 	}
 
-	sc := *constant.NewServerConfig(cfg.Host, uint64(cfg.Port))
+	sc := *constant.NewServerConfig(host, uint64(port))
 	sc.Scheme = protocol
 	if cfg.RootPath != "" {
 		sc.ContextPath = cfg.RootPath

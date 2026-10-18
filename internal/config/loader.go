@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -41,27 +40,27 @@ func (l *JsonLoader) Decode(r io.Reader) (*Config, error) { return decode(r, par
 
 // NewLoader 按扩展名选择 loader：.yaml/.yml → YAML，.json → JSON。
 func NewLoader(path string) (ConfigLoader, error) {
-	ext := strings.ToLower(filepath.Ext(path))
-	switch ext {
-	case ".yaml", ".yml":
-		return &YamlLoader{}, nil
-	case ".json":
-		return &JsonLoader{}, nil
-	case "":
-		return nil, fmt.Errorf("配置文件 %q 没有扩展名，无法判断格式（支持 .yaml/.yml/.json）", path)
-	default:
-		return nil, fmt.Errorf("配置文件 %q 的格式 %q 不受支持（支持 .yaml/.yml/.json）", path, ext)
+	format, err := FormatOf(path)
+	if err != nil {
+		return nil, err
 	}
+	return loaderForFormat(format)
 }
 
+// LoaderFor 按显式格式选择 loader（控制面按 Content-Type 调用）。
+// 空格式按 YAML：JSON 是 YAML 1.2 的子集，两种写法都能解析。
 func LoaderFor(format Format) (ConfigLoader, error) {
+	return loaderForFormat(format)
+}
+
+func loaderForFormat(format Format) (ConfigLoader, error) {
 	switch Format(strings.ToLower(strings.TrimSpace(string(format)))) {
 	case FormatYAML, "":
 		return &YamlLoader{}, nil
 	case FormatJSON:
 		return &JsonLoader{}, nil
 	default:
-		return nil, fmt.Errorf("不支持的配置格式 %q（支持 yaml/json）", format)
+		return nil, fmt.Errorf("%w: %q（支持 yaml/json）", ErrUnsupportedFormat, format)
 	}
 }
 

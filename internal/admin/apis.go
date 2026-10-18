@@ -1,7 +1,6 @@
 package admin
 
 import (
-	"bytes"
 	"crypto/subtle"
 	"errors"
 	"net"
@@ -127,20 +126,16 @@ func (admin *AdminServer) publishConfig(c *gin.Context) {
 		writeJSON(c, http.StatusBadRequest, gin.H{"error": "读取请求体失败: " + err.Error()})
 		return
 	}
-	// 控制面下发的配置同样走 ConfigLoader：格式按 Content-Type 选，
-	// 解析、默认值、校验与磁盘配置完全一致，不另起一条宽松路径。
-	loader, err := config.LoaderFor(config.Format(formatOf(c.ContentType())))
+	// 控制面下发的配置走与磁盘配置完全相同的解析流水线
+	// （解析 → 默认值 → 校验），不另起一条宽松路径。
+	cfg, err := config.ParseDocument(body, config.Format(formatOf(c.ContentType())))
 	if err != nil {
-		writeJSON(c, http.StatusUnsupportedMediaType, gin.H{"error": err.Error()})
-		return
-	}
-	decoder, ok := loader.(config.Decoder)
-	if !ok {
-		writeJSON(c, http.StatusInternalServerError, gin.H{"error": "loader 不支持内存解析"})
-		return
-	}
-	cfg, err := decoder.Decode(bytes.NewReader(body))
-	if err != nil {
+		// 格式不支持是客户端的错（415），内容非法也是（400），
+		// 但要分开报：前者改 Content-Type 就能解决，后者要改配置内容。
+		if errors.Is(err, config.ErrUnsupportedFormat) {
+			writeJSON(c, http.StatusUnsupportedMediaType, gin.H{"error": err.Error()})
+			return
+		}
 		// 校验失败必须挡在这里：一旦进 Store，数据面就会整体拒绝热加载。
 		writeJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
 		return

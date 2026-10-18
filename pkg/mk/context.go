@@ -13,6 +13,9 @@ type CompilationContext struct {
 	ast     *AstInterp
 	code    *CodeInterp
 	vm      *VM
+
+	program  *Program
+	bytecode []byte
 }
 
 func NewCompilationContext(file, code string) *CompilationContext {
@@ -29,15 +32,28 @@ func NewCompilationContext(file, code string) *CompilationContext {
 	return ctx
 }
 
-func (ctx *CompilationContext) Compile() []byte {
-	p := ctx.parser.ParseCode()
-	ctx.checker.Check(p)
-	return ctx.codegen.Gen(p)
+func (ctx *CompilationContext) Compile() {
+	if ctx.program == nil {
+		p := ctx.parser.ParseCode()
+		ctx.checker.Check(p)
+		ctx.program = p
+	}
+	if len(ctx.bytecode) == 0 {
+		ctx.bytecode = ctx.codegen.Gen(ctx.program)
+	}
+}
+
+func (ctx *CompilationContext) Program() *Program {
+	ctx.Compile()
+	return ctx.program
+}
+
+func (ctx *CompilationContext) Bytecode() []byte {
+	ctx.Compile()
+	return ctx.bytecode
 }
 
 // Diagnostics 返回本次编译产生的词法/语法/语义诊断。
-//
-// 上层（如网关的配置加载流程）依赖它把脚本错误挡在下发之前。
 func (ctx *CompilationContext) Diagnostics() []Diagnostic {
 	return ctx.errors.Diagnostics()
 }

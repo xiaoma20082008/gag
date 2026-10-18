@@ -23,6 +23,9 @@ var (
 	// ErrInstanceSource 实例来源本身查询失败（注册中心不可达、超时）。
 	// 与 ErrNoInstances 区分：这是基础设施故障，不是容量问题。
 	ErrInstanceSource = errors.New("core: instance source failed")
+	// ErrRouteEval 路由规则的 DSL 求值失败。
+	// 这不是"没命中"：规则本身有问题，按配置故障处理。
+	ErrRouteEval = errors.New("core: route rule evaluation failed")
 )
 
 // Service 是逻辑服务：协议与默认超时。
@@ -78,9 +81,17 @@ type RequestMeta struct {
 	Region   string
 }
 
-// SelectCluster 执行灰度分流，返回目标集群名。
-func SelectCluster(route *config.Route, meta *RequestMeta) string {
-
+// SelectCluster 返回路由指向的目标集群。
+//
+// 灰度分流已经上移到路由匹配：命中灰度规则的请求会匹配到另一条路由，
+// 那条路由自己写着 canary 集群。所以这里不再按 meta 做二次分流——
+// 一条请求在路由期就确定了唯一集群，重试不会换版本。
+// 保留这个函数是为了让调用方不必判空 route，也留一个将来接
+// region/zone 亲和性的口子。
+func SelectCluster(route *config.Route, _ *RequestMeta) string {
+	if route == nil {
+		return ""
+	}
 	return route.Cluster
 }
 

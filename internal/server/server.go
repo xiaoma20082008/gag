@@ -26,35 +26,9 @@ import (
 	"gag/internal/telemetry/metrics"
 )
 
-// ServerConfig 是数据面服务的监听与超时参数。
-//
-// 注意 ReadTimeout/WriteTimeout 故意不暴露：AI 场景存在长连接与流式响应，
-// 单请求超时由路由级 timeout + context 控制，进程级超时会把长响应直接切断。
-type ServerConfig struct {
-	Host string
-	Port int
-
-	// ReadHeaderTimeout 只约束请求头，防止慢速 header 攻击。
-	ReadHeaderTimeout time.Duration
-	// IdleTimeout 约束 keep-alive 空闲连接。
-	IdleTimeout time.Duration
-	// ShutdownTimeout 是优雅停机的最长等待时间。
-	ShutdownTimeout time.Duration
-
-	MaxHeaderSize int
-}
-
-// Deps 是数据面运行期依赖。
-type Deps struct {
-	Logger   *logging.Logger
-	Metrics  *metrics.Gateway
-	Invokers *proxy.Registry
-}
-
 // GagServer 是网关业务端口的 HTTP 服务。
 type GagServer struct {
-	cfg     *ServerConfig
-	deps    Deps
+	cfg     *config.ServerConfig
 	addr    string
 	srv     *http.Server
 	handler http.Handler
@@ -68,10 +42,13 @@ type GagServer struct {
 	state   atomic.Pointer[State]
 	// chain 与 state 成对替换：请求要么看到旧的完整组合，要么看到新的。
 	chain atomic.Pointer[router.Chain]
+
+	Logger   *logging.Logger
+	Metrics  *metrics.Gateway
+	Invokers *proxy.Registry
 }
 
-// NewGag 构建数据面服务；此时尚未开始监听。
-func NewGag(cfg *ServerConfig, deps Deps) *GagServer {
+func NewGag(cfg *config.ServerConfig) *GagServer {
 	if cfg.ReadHeaderTimeout <= 0 {
 		cfg.ReadHeaderTimeout = 10 * time.Second
 	}
@@ -84,7 +61,6 @@ func NewGag(cfg *ServerConfig, deps Deps) *GagServer {
 
 	s := &GagServer{
 		cfg:  cfg,
-		deps: deps,
 		addr: fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 	}
 	s.handler = &chainHandler{srv: s}
@@ -115,13 +91,13 @@ func (s *GagServer) Apply(snap *config.Snapshot) error {
 	serverCfg := snap.Config().Server
 	chain, err := router.Build(router.Options{
 		State:    state,
-		Logger:   s.deps.Logger,
-		Metrics:  s.deps.Metrics,
+		Logger:   s.Logger,
+		Metrics:  s.Metrics,
 		MaxBody:  serverCfg.MaxBodyBytes,
 		IPAllow:  serverCfg.IPAllow,
 		IPDeny:   serverCfg.IPDeny,
 		CORS:     serverCfg.CORS,
-		Invokers: s.deps.Invokers,
+		Invokers: s.Invokers,
 		Source:   state.Source(),
 	})
 	if err != nil {

@@ -43,7 +43,10 @@ COMMIT=${COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo unknown)}
 BUILD_TIME=${BUILD_TIME:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 
 # 构建期要注入的变量统一在这里加，避免 -ldflags 散落在各处。
-LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
+# 变量声明在 internal/gateway/build.go——注意 -X 必须写**完整导入路径**，
+# 写成 main.version 会静默不生效（-X 找不到目标时只是不赋值，不报错）。
+BUILD_PKG=gag/internal/gateway
+LDFLAGS="-s -w -X ${BUILD_PKG}.version=${VERSION} -X ${BUILD_PKG}.commit=${COMMIT} -X ${BUILD_PKG}.buildTime=${BUILD_TIME}"
 
 if [ "$CHECK" = "1" ]; then
 	echo "==> gofmt"

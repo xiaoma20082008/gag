@@ -248,7 +248,8 @@ Post 阶段在下游调用返回后做后置处理，并统一输出访问日志
 
 灰度设计要求：
 
-- 需要 route 层支持流量匹配与 split
+- route 层要能用 `rule` 表达确定性分流（header / cookie / IP / tenant），
+  百分比分流交给 lb 的实例权重，见 ROUTING.md §8.2
 - 每个灰度变更都要绑定 trace tag / metrics tag，便于观察效果
 - 灰度发布必须具备快速回滚能力，不强依赖代码发布
 

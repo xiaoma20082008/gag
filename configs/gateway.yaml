@@ -90,6 +90,12 @@ tenants:
           jitter: 0.2
           retry_on: [429]
 
+        # 路由匹配 = 静态字段（path/methods/host/headers/query）与 rule 的"与"。
+        # 静态字段先做快速筛选，通过之后再求值 rule；写不出来的条件才用 rule。
+        # rule 在配置加载期就编译（正则/CIDR 都在那时解析），请求期只做求值。
+        #
+        # priority 决定同一租户内多条路由同时命中时谁先匹配，大的先。
+        # 为 0 时按结构排序：精确路径 > 前缀路径 > 仅 rule 的路由。
         routes:
           - id: order.create
             path: /v1/orders
@@ -99,27 +105,34 @@ tenants:
               content_types: ["application/json"]
               required_body_fields: [sku, quantity]
 
+          # 灰度路由：只写 rule，靠 priority 压过下面的 order.get。
+          # 这条必须先匹配，否则 /v1/orders/* 会先吃掉带 X-Canary 的请求。
+          - id: order.get.canary
+            rule: 'http.header["X-Canary"] == "true"'
+            methods: [GET]
+            priority: 10
+            cluster: order-service-canary
+
           - id: order.get
             path: /v1/orders/*
             methods: [GET]
             cluster: order-service-hz
-            rewrite:
-              strip_prefix: /v1
             rate_limit:
               rps: 500
               burst: 1000
               key: user
-            split:
-              # 内测流量：带 X-Canary 头的请求直接进入灰度集群
-              - cluster: order-service-canary
-                match:
-                  headers:
-                    X-Canary: "true"
-              # 其余流量按权重分配，5% 灰度
-              - cluster: order-service-canary
-                weight: 5
-              - cluster: order-service-hz
-                weight: 95
+
+          # 仅内网可访问的子资源：静态字段表达不了 IP 网段，用 cidr()。
+          # 客户端 IP 解析不出来时 cidr() 返回 false（脏请求不算配置错误）。
+          - id: order.get.internal
+            rule: 'matches(http.path, "^/v1/orders/[0-9]+/(audit|replay)$") && cidr(http.client_ip, "10.0.0.0/8")'
+            methods: [GET]
+            priority: 5
+            cluster: order-service-hz
+
+        # 按百分比灰度不再由路由承担：把两个版本的实例放进同一个 cluster，
+        # 用实例权重（nacos 的 weight / 静态配置的 weight）在 lb 层分流。
+        # 路由级 split 已删除，一条请求只能落到一个 cluster。
 
         clusters:
           - name: order-service-hz
@@ -172,6 +185,19 @@ tenants:
             validate:
               content_types: ["application/json"]
               required_body_fields: [model, messages]
+
+          # 合作渠道走独立配额：in() 是枚举判断，比一长串 || 更好读。
+          - id: ai.chat.partner
+            rule: 'http.path == "/v1/chat/completions" && in(http.header["X-Channel"], "partner", "internal")'
+            methods: [POST]
+            priority: 20
+            cluster: model-infer-hz
+            rate_limit:
+              rps: 200
+              burst: 400
+              key: tenant
+              algorithm: sliding_window
+              window: 1s
 
         clusters:
           - name: model-infer-hz

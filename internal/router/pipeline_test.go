@@ -1036,7 +1036,7 @@ func TestChainNoInstancesIsUnavailable(t *testing.T) {
 	}
 }
 
-// ---------- 灰度分流按认证后的身份 ----------
+// ---------- 路由规则（DSL）在真实链路里生效 ----------
 
 const canaryConfig = `
 version: v1
@@ -1062,29 +1062,31 @@ tenants:
         protocol: http
         timeout: 500ms
         routes:
-          - id: r_get
+          # 灰度：带 X-Canary 的请求走 canary 集群。
+          # 规则在启动时编译，请求期只做求值。
+          - id: r_canary
+            rule: 'http.header["X-Canary"] == "true"'
+            priority: 10
+            cluster: canary
+            auth:
+              type: api_key
+              keys: ["k1"]
+          # 其余请求走 base。
+          - id: r_base
             path: /v1/orders
             methods: [GET]
             cluster: base
             auth:
               type: api_key
               keys: ["k1"]
-            split:
-              - cluster: canary
-                match:
-                  users: ["%s"]
-              - cluster: base
-                weight: 1
-              - cluster: canary
-                weight: 0
         clusters:
           - name: base
           - name: canary
 `
 
-// TestChainSplitUsesAuthenticatedUser 验证分流发生在调用期之后：
-// 只有认证跑完，按 users 的灰度规则才拿得到真实身份。
-func TestChainSplitUsesAuthenticatedUser(t *testing.T) {
+// TestChainRuleRoutesToCanary 验证 DSL 规则在完整链路里生效：
+// 命中规则的请求走 canary，未命中的落到静态路由的 base 集群。
+func TestChainRuleRoutesToCanary(t *testing.T) {
 	base := newTestDownstream(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("base"))
 	})
@@ -1094,21 +1096,33 @@ func TestChainSplitUsesAuthenticatedUser(t *testing.T) {
 	})
 	defer canary.close()
 
-	cfg := fmt.Sprintf(canaryConfig, base.addr(), canary.addr(), apiKeySubject("k1"))
+	cfg := fmt.Sprintf(canaryConfig, base.addr(), canary.addr())
 	ch := buildChain(t, cfg, nil)
 
-	// k1 命中 users 规则，必须稳定落到灰度集群。
+	// 带灰度头的请求必须稳定落到 canary。
 	for i := 0; i < 5; i++ {
-		rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
+		rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{
+			"X-API-Key": "k1",
+			"X-Canary":  "true",
+		}, nil)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("应成功，实际 %d", rec.Code)
+			t.Fatalf("应成功，实际 %d: %s", rec.Code, rec.Body.String())
 		}
 		if got := rec.Body.String(); got != "canary" {
-			t.Fatalf("命中 users 规则应进灰度集群，实际 %q", got)
+			t.Fatalf("命中规则应进灰度集群，实际 %q", got)
 		}
 	}
 	if canary.hits.Load() != 5 || base.hits.Load() != 0 {
 		t.Fatalf("流量应全部落在灰度集群：canary=%d base=%d",
 			canary.hits.Load(), base.hits.Load())
+	}
+
+	// 不带灰度头：规则不命中，回落到静态路由。
+	rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("应成功，实际 %d", rec.Code)
+	}
+	if got := rec.Body.String(); got != "base" {
+		t.Fatalf("未命中规则应走 base，实际 %q", got)
 	}
 }

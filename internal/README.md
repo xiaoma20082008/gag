@@ -13,36 +13,47 @@ pkg/errors  ←  internal/config  ←  internal/core
                                       ↑
         router / middleware / proxy / discovery / lb
                                       ↑
-                                internal/server
+                        internal/server  /  internal/admin
+                                      ↑
+                                internal/gateway
                                       ↑
                                   cmd/main
 ```
 
+`internal/gateway` 是装配层：它 import 下面所有包，但没有任何包 import 它
+（除 `cmd/main`）。因此它不参与循环依赖的判断，也最适合放"启动顺序"
+这种跨包知识。
+
+`internal/script` 只依赖 `pkg/mk`，被 `router` 引用；它同样不在主链上。
+
 | 包 | 对应设计文档 | 职责 |
 | --- | --- | --- |
-| `core` | §3.2 §3.3 | 请求生命周期契约：`RequestContext`、回调点（`HookPoint`/`Action`/`Callbacks`）、领域模型（`Instance`/`Decision`/`RequestMeta`）、分流与路径改写、查找错误 |
-| `router` | §3 §3.2 | 执行引擎与装配：`Chain`（按 order 跑回调点、兜 panic、无条件收尾）、`Table`（路由表）、`Matcher`、`Build`（把中间件挂到回调点上） |
+| `core` | §3.2 §3.3 | 请求生命周期契约：`RequestContext`、回调点（`HookPoint`/`Action`/`Callbacks`）、领域模型（`Instance`/`Decision`/`RequestMeta`）、查找错误 |
+| `router` | §3 §3.2 | 执行引擎与装配：`Chain`（按 order 跑回调点、兜 panic、无条件收尾）、`Table`（路由表，按 priority + 结构分排序）、`Matcher`（静态字段 + DSL 规则）、`Build`（把中间件挂到回调点上） |
+| `script` | ROUTING.md §6.3 | 脚本管理：按名字缓存 `pkg/mk` 编译出的 `Program` 与字节码，供路由规则与请求变换复用。求值（`Eval`）尚在实现中 |
 | `middleware` | §4 / MODULES.md | 治理中间件（request_id / body_limit / ip / cors / auth / validate / ratelimit / access_log / metrics / trace / recovery）与策略原语（`Set`、令牌桶、滑动窗口、熔断、API Key / JWT） |
 | `proxy` | §3.3 | 下游调用：`Upstream`（一次尝试的完整流程：解析实例 → 选节点 → 发请求 → 判重试）、`Transformer`（响应规范化、头改写、hop-by-hop 清理）、协议调用器（HTTP 已实现，Dubbo 留扩展点） |
-| `discovery` | §3.2 | 实例来源：`DiscoveryClient` 抽象 + `static` / `nacos` 实现，以及调用期的 `Resolver`（分流 → 取实例 → 负载均衡，按集群缓存 balancer） |
+| `discovery` | §3.2 | 实例来源：`DiscoveryClient` 抽象 + `static` / `nacos` 实现，以及调用期的 `Resolver`（取路由写死的集群 → 取实例 → 负载均衡，按集群缓存 balancer） |
 | `lb` | §3.2 | round_robin / random / least_conn / consistent_hash（HRW，键经 ctx 传入）与 `RetryPolicy`（退避 + 抖动） |
-| `config` | §9 | 声明式 DSL 模型、`ConfigLoader`（YAML / JSON 两种实现，共用一条解析→默认值→校验流水线）、不可变快照 |
+| `config` | §9 | 配置来源 `ConfigClient`（file / nacos）、解析流水线（YAML / JSON 共用一条解析→默认值→校验）、声明式模型、不可变快照 |
 | `telemetry/metrics` | §5.1 | prometheus 官方客户端：指标注册表、网关标准指标、`/metrics` 抓取端点 |
 | `telemetry/tracing` | §5.2 | W3C traceparent 解析/透传/注入、span 与耗时 |
 | `telemetry/logging` | §5.3 | JSON 结构化日志、异步写入、敏感字段脱敏、访问日志结构 |
 | `admin` | §8 | 控制平面（Gag Admin）：管理端口、探针与指标、配置版本/发布/回滚/订阅（`Store`） |
 | `server` | §7 | 数据平面（Gag Server）：业务端口、运行时状态、热加载原子替换、优雅停机 |
+| `gateway` | — | 进程装配：读配置 → 建双端口 → 起热加载 → 等信号 → 并行优雅停机。`cmd/main` 因此只剩参数与信号 |
 | `storage` | — | 外部存储客户端（Redis / MySQL），目前只做连接与健康探测 |
 | `llm` | §12 | 模型客户端抽象（OpenAI / Anthropic 实现，独立于治理链） |
 
 `pkg/` 下放可被外部引用的东西：`pkg/errors` 是统一的错误码契约（`Code`/`Error`/`AsError`），
-`pkg/mk` 是 mk 策略 DSL 的编译器与 VM，`pkg/mk/script` 是它与网关之间的桥接。
+`pkg/mk` 是 mk 策略 DSL 的编译器与 VM。它与网关之间的桥接在 `internal/script`
+（`pkg/mk/script` 已删除）。
 
 ## 双端口：数据平面与控制平面
 
 进程内启动两个独立的 HTTP 服务，而不是把管理端点挂在业务端口上：
 
-| | Gag Server（`internal/server`） | Gag Admin（`internal/admin`） |
+| | Data Server（`internal/server`） | Admin Server（`internal/admin`） |
 | --- | --- | --- |
 | 端口 | `server.listen`（默认 `:8080`） | `server.admin_listen`（默认 `127.0.0.1:9090`） |
 | 流量 | 全部业务请求，交给治理链 | 探针、指标、配置发布/回滚 |
@@ -127,18 +138,51 @@ client
 更细的设计取舍（为何去掉连接级钩子、为何零值取 `GoOn`）见
 [模块与请求处理设计](../docs/MODULES.md)。
 
-## 热加载
+## 配置来源（ConfigClient）
+
+配置**从哪来**与配置**怎么解析**是两件事，分别由两个接口承担：
 
 ```
+ConfigClient（file / nacos / apollo）     → 只负责把文档原文取回来
+  ↓ config.SnapshotFrom / ParseDocument
+ConfigLoader（YAML / JSON）               → 只负责解析成 Config
+  ↓ ApplyDefaults + Validate
+Snapshot                                   → 数据面唯一输入
+```
+
+`ConfigClient` 是整份文档级的抽象，不是字段级：网关配置是一个 22KB 的结构化
+对象，按字段 `Get("server.listen")` 既不可读，也没法做原子替换。
+
+| 实现 | key 语义 | 变更检测 |
+| --- | --- | --- |
+| `FileConfigClient` | 文件路径（空则用构造时的 path） | 轮询，**内容**变化才算（mtime 变不算） |
+| `NacosConfigClient` | dataId（空则用配置里的 `data_id`） | SDK 长连接监听，ctx 取消即退订 |
+
+构造 `FileConfigClient` 时就会读一次文件：路径写错立刻失败，不会让网关
+拿着一份空配置启动（那会表现成"所有请求 404"，比启动失败难查得多）。
+
+## 热加载
+
+两路变更最终都汇到同一个 `apply`，谁后到谁生效（last write wins）：
+
+```
+① 控制面发布
 admin POST /admin/config（管理端口）
-  → ConfigLoader.Decode（strict 解析 + 校验，非法配置在这里就被挡住）
+  → config.ParseDocument（strict 解析 + 校验，非法配置在这里就被挡住）
   → admin.Store.PublishSnapshot（生成修订号，通知订阅者）
-  → server.Apply（构建 State + 路由表 + 治理链，成功后原子替换）
+  → gateway.apply
+
+② 配置来源自身变化
+文件改动 / nacos 推送
+  → ConfigClient.OnChange（拿到文档原文）
+  → config.SnapshotFrom（同一条解析流水线）
+  → gateway.apply
 ```
 
 关键点：
 
 - 编译失败时旧配置继续服务，线上不受影响；`/readyz` 不会因此变红。
+- 内容哈希没变就跳过：只改注释/缩进不重建路由表、不重新预热实例来源。
 - 单条路由策略未变时复用同一个 `middleware.Set`（按配置内容的 sha256 比对），
   限流令牌与熔断计数得以延续。
 - `State` 与 `Chain` 成对原子替换，请求要么看到旧的完整组合，要么看到新的。
@@ -147,7 +191,7 @@ admin POST /admin/config（管理端口）
 ## 运行
 
 ```bash
-go run ./cmd/main -config configs/gateway.yaml
+go run ./cmd/main -c configs/gateway.yaml
 ```
 
 | 端口 | 端点 | 说明 |
@@ -175,7 +219,8 @@ docker build -f build/Dockerfile -t gag:local .
 
 ## 已验证的能力
 
-`go test ./...` 覆盖：配置校验与快照稳定性、路由优先级与灰度分流、查找链两段式
+`go test ./...` 覆盖：配置校验与快照稳定性、路由字段校验与 priority/结构分排序、
+匹配器语义（精确/前缀边界/method/host/header/query）、查找链两段式
 （路由期内存匹配 / 调用期集群与实例）、负载均衡策略（权重组、在途计数、一致性哈希稳定性）、
 限流/熔断/重试/认证、回调点顺序与返回码矩阵（GoOn/Respond/Finish/Close + panic）、
 端到端转发（401/403/404/413/400/429/502/503/CORS/trace 透传）、
@@ -189,6 +234,10 @@ SIGTERM 后双端口释放且 `exit=0`。
 测试的分工：
 
 - `internal/router/chain_test.go` 只测框架语义（顺序、返回码、panic 兜底），不碰 HTTP；
+- `internal/router/match_test.go` 只测匹配器（精确/前缀边界/method/host/header/query
+  与 score 排序），不启 HTTP 服务，也不依赖配置加载；
+- `internal/config/route_test.go` 用一份最小配置逐字段破坏，验证校验错误能定位到具体路由；
+- `internal/gateway/listen_test.go` 只测纯函数（地址拆分、构建标识），不占端口；
 - `internal/discovery` 测实例来源与 resolver（含 nacos 空列表归一、balancer 复用）；
 - `internal/router/pipeline_test.go` 用自建的内存 `State` 跑完整链——`router` 不能
   反向 import `server`（server 依赖 router 的装配结果），测试 fixture 因此自带一份
@@ -206,4 +255,7 @@ SIGTERM 后双端口释放且 `exit=0`。
 - **主动健康检查**：`Cluster.HealthCheck` 参数已在配置模型中，尚无检查器；
   实例健康目前由注册中心自己回答。
 - **OpenTelemetry 导出**：当前只做上下文生成与透传，未接入 OTLP exporter。
+- **路由级百分比分流**：`Route.Cluster` 是单值，5% 灰度要在 lb 层用实例权重表达；
+  路由级 weighted split 已删除（见 ROUTING.md §8.2）。
+- **路由期按身份分流**：认证在 `after_route` 才跑，`http.user` 在路由期恒为空。
 - **native histogram / exemplars**：`metrics` 已使用 prometheus 官方客户端，但目前仍是经典直方图分桶。
