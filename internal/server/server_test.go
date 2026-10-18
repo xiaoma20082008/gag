@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"gag/internal/config"
-	"gag/internal/observability/logging"
-	"gag/internal/observability/metrics"
 	"gag/internal/proxy"
+	"gag/internal/telemetry/logging"
+	"gag/internal/telemetry/metrics"
 )
 
 const baseConfig = `
@@ -22,6 +22,13 @@ server:
   listen: "127.0.0.1:18080"
   admin_listen: "127.0.0.1:19090"
   default_tenant: t1
+  discovery:
+    type: static
+    instances:
+      - tenant: t1
+        service: svc
+        cluster: c1
+        addr: 127.0.0.1:1
 tenants:
   - name: t1
     services:
@@ -37,8 +44,6 @@ tenants:
               keys: ["k1"]
         clusters:
           - name: c1
-            instances:
-              - addr: 127.0.0.1:1
 `
 
 func newTestServer(t *testing.T, yaml string) (*GagServer, *config.Snapshot) {
@@ -226,4 +231,54 @@ func waitForListen(t *testing.T, s *GagServer) string {
 	}
 	t.Fatal("服务未在 2s 内开始监听")
 	return ""
+}
+
+// nacosConfig 只验证装配路径：注册中心不可达时网关仍应正常装配，
+// 实例查不到是调用期的事（502/503），不该阻塞启动。
+const nacosConfig = `
+version: v1
+server:
+  listen: "127.0.0.1:18081"
+  admin_listen: "127.0.0.1:19091"
+  default_tenant: t1
+  discovery:
+    type: nacos
+    address: 127.0.0.1:18848
+    namespace: test
+    log_level: warn
+    timeout_ms: 200
+tenants:
+  - name: t1
+    services:
+      - name: svc
+        protocol: http
+        timeout: 200ms
+        routes:
+          - id: r1
+            path: /v1/orders
+            cluster: c1
+        clusters:
+          - name: c1
+`
+
+func TestApplyWithNacosDiscovery(t *testing.T) {
+	s, snap := newTestServer(t, nacosConfig)
+	if err := s.Apply(snap); err != nil {
+		t.Fatalf("nacos 发现配置应能装配: %v", err)
+	}
+	if s.State().Table() == nil {
+		t.Fatal("装配后查找表不应为空")
+	}
+}
+
+func TestApplyRejectsUnsupportedDiscoveryType(t *testing.T) {
+	broken := strings.Replace(nacosConfig, "type: nacos", "type: consul", 1)
+	s, snap := newTestServer(t, broken)
+	err := s.Apply(snap)
+	if err == nil {
+		t.Fatal("consul 适配器尚未实现，Apply 应失败")
+	}
+	if !strings.Contains(err.Error(), "consul") {
+		t.Fatalf("错误信息应指出未实现的类型: %v", err)
+	}
 }

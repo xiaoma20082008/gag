@@ -5,23 +5,38 @@
 
 ## 包结构
 
+依赖方向自上而下，箭头不允许反向（`core` 不 import 任何 `internal/` 下的业务包，
+只依赖 `internal/config` 与 `pkg/errors`，因此不存在环）：
+
+```
+pkg/errors  ←  internal/config  ←  internal/core
+                                      ↑
+        router / middleware / proxy / discovery / lb
+                                      ↑
+                                internal/server
+                                      ↑
+                                  cmd/main
+```
+
 | 包 | 对应设计文档 | 职责 |
 | --- | --- | --- |
-| `gateway` | §2 §3 | 请求上下文、回调点框架（Hook/Action/Callbacks/Chain）、统一错误模型 |
-| `modules` | §3 §4 / MODULES.md | 治理模块（request_id / body_limit / ip / cors / auth / validate / ratelimit / upstream / response / access_log / metrics / trace）与装配 |
-| `config` | §9 | 声明式 DSL 模型、YAML 加载、默认值、语义校验、不可变快照 |
-| `routing` | §3.2 / ROUTING.md | Tenant → Service → Cluster → Instance 分层查找、灰度分流、健康状态 |
-| `lb` | §3.2 | round_robin / random / least_conn / consistent_hash |
-| `policy` | §4 | 限流（令牌桶/滑动窗口）、熔断（closed/open/half-open）、重试、认证（API Key / JWT） |
-| `observability/metrics` | §5.1 | prometheus 官方客户端：指标注册表、网关标准指标、`/metrics` 抓取端点 |
-| `observability/tracing` | §5.2 | W3C traceparent 解析/透传、span 与耗时 |
-| `observability/logging` | §5.3 | JSON 结构化日志、异步写入、敏感字段脱敏、访问日志结构 |
-| `controlplane` | §8 | 配置版本、发布、回滚、订阅（Watch） |
-| `proxy` | §3.3 | 下游协议适配（HTTP 已实现，Dubbo/gRPC 留扩展点） |
-| `llm` | §12 | 模型客户端抽象（OpenAI 实现，独立于治理链） |
-| `script` | §9 / pkg/mk | mk 策略脚本桥接：编译期校验已可用，执行器待 mk VM 完成 |
+| `core` | §3.2 §3.3 | 请求生命周期契约：`RequestContext`、回调点（`HookPoint`/`Action`/`Callbacks`）、领域模型（`Instance`/`Decision`/`RequestMeta`）、分流与路径改写、查找错误 |
+| `router` | §3 §3.2 | 执行引擎与装配：`Chain`（按 order 跑回调点、兜 panic、无条件收尾）、`Table`（路由表）、`Matcher`、`Build`（把中间件挂到回调点上） |
+| `middleware` | §4 / MODULES.md | 治理中间件（request_id / body_limit / ip / cors / auth / validate / ratelimit / access_log / metrics / trace / recovery）与策略原语（`Set`、令牌桶、滑动窗口、熔断、API Key / JWT） |
+| `proxy` | §3.3 | 下游调用：`Upstream`（一次尝试的完整流程：解析实例 → 选节点 → 发请求 → 判重试）、`Transformer`（响应规范化、头改写、hop-by-hop 清理）、协议调用器（HTTP 已实现，Dubbo 留扩展点） |
+| `discovery` | §3.2 | 实例来源：`DiscoveryClient` 抽象 + `static` / `nacos` 实现，以及调用期的 `Resolver`（分流 → 取实例 → 负载均衡，按集群缓存 balancer） |
+| `lb` | §3.2 | round_robin / random / least_conn / consistent_hash（HRW，键经 ctx 传入）与 `RetryPolicy`（退避 + 抖动） |
+| `config` | §9 | 声明式 DSL 模型、`ConfigLoader`（YAML / JSON 两种实现，共用一条解析→默认值→校验流水线）、不可变快照 |
+| `telemetry/metrics` | §5.1 | prometheus 官方客户端：指标注册表、网关标准指标、`/metrics` 抓取端点 |
+| `telemetry/tracing` | §5.2 | W3C traceparent 解析/透传/注入、span 与耗时 |
+| `telemetry/logging` | §5.3 | JSON 结构化日志、异步写入、敏感字段脱敏、访问日志结构 |
+| `admin` | §8 | 控制平面（Gag Admin）：管理端口、探针与指标、配置版本/发布/回滚/订阅（`Store`） |
 | `server` | §7 | 数据平面（Gag Server）：业务端口、运行时状态、热加载原子替换、优雅停机 |
-| `admin` | §8 | 控制平面（Gag Admin）：管理端口、探针与指标、配置发布/回滚 |
+| `storage` | — | 外部存储客户端（Redis / MySQL），目前只做连接与健康探测 |
+| `llm` | §12 | 模型客户端抽象（OpenAI / Anthropic 实现，独立于治理链） |
+
+`pkg/` 下放可被外部引用的东西：`pkg/errors` 是统一的错误码契约（`Code`/`Error`/`AsError`），
+`pkg/mk` 是 mk 策略 DSL 的编译器与 VM，`pkg/mk/script` 是它与网关之间的桥接。
 
 ## 双端口：数据平面与控制平面
 
@@ -57,28 +72,56 @@
 ```
 client
   │
-  ├─ before_route    request_id / trace → body_limit → ip 黑白名单 → cors 预检
-  ├─ (内建)          租户解析          ← 框架内建，非模块
-  ├─ found_route     （预留：按租户改写策略）
-  ├─ (内建)          路由查找 + 路径改写  ← 框架内建，非模块
-  ├─ after_route     auth → validate → rate_limit
-  ├─ forward         熔断判定 → 下游尝试 →（可重试，每次尝试都触发 forward）
-  ├─ read_response   响应规范化 → cors 响应头
-  └─ request_finish  access_log → metrics → trace 收尾
+  ├─ before_route    mw_request_id → mw_body_limit → mw_ip → mw_cors 预检
+  ├─ (内建)          租户解析              ← 框架内建，非中间件
+  ├─ found_route     （内建）路由查找 + 路径改写
+  │                   只做内存匹配：租户 → 路由 → 服务，不碰实例来源
+  ├─ after_route     mw_auth → mw_validate → mw_ratelimit
+  ├─ forward         熔断判定 → mw_upstream：集群分流 → 注册中心取实例 → 负载均衡 → 下游尝试
+  │                   （可重试；每次尝试都重新查一次实例，换个节点再试）
+  ├─ read_response   mw_transformer 响应规范化 → mw_cors 响应头
+  └─ request_finish  mw_access_log → mw_metrics → mw_trace 收尾
 ```
 
-模块在自己关心的回调点上注册 handler，顺序由注册时的 `order` 决定而非模块排列顺序。
-租户解析与路由查找刻意内建：它们决定后续模块能看到什么上下文，做成模块会让
-「哪些模块能看到路由结果」变成注册顺序问题。
+每个中间件在自己关心的回调点上注册 handler，顺序由注册时的 `order` 决定而非中间件排列顺序。
+租户解析与路由查找刻意内建（`router.Hooks`）：它们决定后续中间件能看到什么上下文，
+做成中间件会让「谁能看到路由结果」变成注册顺序问题。
+
+装配入口是 `router.Build`，它把 `Options`（日志、指标、CORS、实例来源、调用器注册表）
+翻译成一组 `core.Module`，逐个 `Init(callbacks)` 自注册，最后配上内建钩子。
+`Options` 里为 nil 的项直接不挂载——回调点上的空转也是开销。
+
+**查找链为什么要拆成两段。** `Tenant → Service → Cluster → Instance` 里，
+前三跳来自网关自己的配置，最后一跳来自 nacos/consul 这类注册中心——实例是运行时数据。
+因此路由期（`found_route` → `router.Table.ResolveRoute`）只回答「请求属于哪条路由」：
+治理策略是按路由配置的，认证、限流都必须先知道路由；而真正「打到哪」要等调用期
+（`forward` → `discovery.Resolver.Resolve`）才能确定：
+
+- 每次尝试重新查一次注册中心，实例下线后下一次重试自然落到别的节点；
+- 灰度分流需要按用户稳定哈希，而身份要等认证之后才知道（`c.Subject`）；
+- 重试换节点是基本常识，查找链放在调用期才能做到。
+
+实例来源由 `discovery.DiscoveryClient` 抽象，`discovery.FromConfig` 按 `server.discovery` 构造：
+
+| `type` | 行为 |
+| --- | --- |
+| `static` | 读配置写死的清单（本地开发/单机部署） |
+| `nacos` | 租户 → group、服务 → 服务名、集群 → 集群名，只取健康且启用、权重 > 0 的实例；`instance list is empty` 归一成空列表而不是错误 |
+| `consul` | 尚未实现，装配期直接报错 |
+
+接注册中心时 `router.Table` 与治理中间件都不需要改；nacos 客户端按连接参数进程内复用
+（`newCachedNacos`），热加载不会反复创建 SDK 后台 goroutine，装配期还会预热一遍实例缓存。
 
 失败语义：
 
 - 任一回调点返回非 `GoOn` 即短路；被拒绝的请求仍会执行 `read_response`，
   保证 CORS 头、hop-by-hop 清理对 401/429/502 同样生效。
+- 集群下没有实例是 503（容量问题），注册中心不可达是 502（基础设施故障），
+  错误码要能区分——运维看监控时的处置动作完全不同。
 - `ActionRespond` 表示响应已就绪（如 CORS 预检 204）；`ActionFinish` 表示治理拒绝。
   保留两个码是为了让访问日志能区分「业务短路」与「治理拒绝」。
 - `ActionClose` 不写响应直接断连，`read_response` 跳过，但 `request_finish` 仍执行。
-- `request_finish` **无条件执行**且逐个兜 panic：一个收尾模块出错不连带其余模块。
+- `request_finish` **无条件执行**且逐个兜 panic：一个收尾中间件出错不连带其余。
 - handler panic 被捕获，转成 `internal_error` 的 500，然后继续走完收尾。
 
 更细的设计取舍（为何去掉连接级钩子、为何零值取 `GoOn`）见
@@ -88,15 +131,16 @@ client
 
 ```
 admin POST /admin/config（管理端口）
-  → config.Load（strict 解析 + 校验，非法配置在这里就被挡住）
-  → controlplane.Publish（生成修订号，通知订阅者）
+  → ConfigLoader.Decode（strict 解析 + 校验，非法配置在这里就被挡住）
+  → admin.Store.PublishSnapshot（生成修订号，通知订阅者）
   → server.Apply（构建 State + 路由表 + 治理链，成功后原子替换）
 ```
 
 关键点：
 
 - 编译失败时旧配置继续服务，线上不受影响；`/readyz` 不会因此变红。
-- 单条路由策略未变时复用同一个 `policy.Set`，限流令牌与熔断计数得以延续。
+- 单条路由策略未变时复用同一个 `middleware.Set`（按配置内容的 sha256 比对），
+  限流令牌与熔断计数得以延续。
 - `State` 与 `Chain` 成对原子替换，请求要么看到旧的完整组合，要么看到新的。
 - 监听地址变更需要重启：端口在进程启动时绑定，热加载只替换配置内容。
 
@@ -119,27 +163,47 @@ go run ./cmd/main -config configs/gateway.yaml
 
 `/admin/*` 要求 `server.admin_token`（`Authorization: Bearer <token>`）；
 未配置 token 时仅允许回环地址访问，不会退化成"无鉴权放行"。
+管理面的契约见 [`api/openapi.yaml`](../api/openapi.yaml)。
+
+构建与部署：
+
+```bash
+./scripts/build.sh -c        # gofmt + vet + test，然后构建 dist/gag
+./scripts/deploy.sh up       # 起 nacos/redis/mysql，构建镜像
+docker build -f build/Dockerfile -t gag:local .
+```
 
 ## 已验证的能力
 
-`go test ./...` 覆盖：配置校验与快照稳定性、路由优先级与灰度比例、实例摘除、限流/熔断/重试/认证、
-回调点顺序与返回码矩阵（GoOn/Respond/Finish/Close + panic）、端到端转发（401/403/404/413/400/429/502/CORS/trace 透传）、
+`go test ./...` 覆盖：配置校验与快照稳定性、路由优先级与灰度分流、查找链两段式
+（路由期内存匹配 / 调用期集群与实例）、负载均衡策略（权重组、在途计数、一致性哈希稳定性）、
+限流/熔断/重试/认证、回调点顺序与返回码矩阵（GoOn/Respond/Finish/Close + panic）、
+端到端转发（401/403/404/413/400/429/502/503/CORS/trace 透传）、
 重试次数与 POST 不重试、熔断快速失败、热加载状态复用、配置发布与回滚，
 以及双端口行为（业务端口不响应管理端点、探针不鉴权、管理接口鉴权、发布后数据面即时生效）。
 
-另以真实二进制做过双端口冒烟：未认证 401、下游不可达 502、业务端口不暴露 `/healthz`、
-`/admin/config` 发布后旧路由立即 404 且策略集被复用、SIGTERM 后双端口释放且 `exit=0`。
+另以真实二进制做过双端口冒烟（两个真实下游实例）：未认证 401、认证后请求在两个实例间轮询、
+`/admin/config` 发布后旧路由立即 404、新路由继续转发且访问日志记录到具体实例、
+SIGTERM 后双端口释放且 `exit=0`。
 
-真实链路与单元测试的分工：`internal/gateway` 只测框架语义（顺序、返回码、panic 兜底），
-`internal/modules` 用自建的内存 `State` 跑完整链——`modules` 不能被 `server` import
-（server 依赖 modules 的装配结果），测试 fixture 因此自带一份路由表与策略集编译。
+测试的分工：
+
+- `internal/router/chain_test.go` 只测框架语义（顺序、返回码、panic 兜底），不碰 HTTP；
+- `internal/discovery` 测实例来源与 resolver（含 nacos 空列表归一、balancer 复用）；
+- `internal/router/pipeline_test.go` 用自建的内存 `State` 跑完整链——`router` 不能
+  反向 import `server`（server 依赖 router 的装配结果），测试 fixture 因此自带一份
+  路由表、策略集与实例来源。
 
 ## 尚未实现（明确的后续项）
 
-- **流式响应**：当前 `gateway.Response.Body` 为 `[]byte`，SSE/大模型流式输出需要增加 `io.Reader` 通道。
-- **gRPC / Dubbo**：`proxy` 已留协议接口，尚无具体实现。
-- **mk 脚本执行**：编译与诊断已接入，`script.Runtime` 待 mk VM 完成后替换实现。
+- **流式响应**：当前响应体按 `[]byte` 处理，SSE/大模型流式输出需要增加 `io.Reader` 通道。
+- **gRPC / Dubbo**：`proxy` 已留 `Invoker` 接口与 dubbo 桩，尚无具体实现。
+- **mk 脚本执行**：编译器与诊断已可用（`pkg/mk`），网关侧只接了 `pkg/mk/script` 桥接。
 - **分布式限流**：目前为单实例内存限流，多副本需要接入 Redis 或统一限流服务。
 - **TLS / mTLS**：配置模型与入口尚未包含证书管理。
+- **consul 适配器**：`discovery.DiscoveryClient` 已留好接口，`nacos` 已接入，
+  `type: consul` 会在装配期直接报错。
+- **主动健康检查**：`Cluster.HealthCheck` 参数已在配置模型中，尚无检查器；
+  实例健康目前由注册中心自己回答。
 - **OpenTelemetry 导出**：当前只做上下文生成与透传，未接入 OTLP exporter。
-- **native histogram / exemplars**：`metrics` 已使用 prometheus 官方客户端，但目前仍是经典直方图分桶，未开启 native histogram 与 trace exemplar。
+- **native histogram / exemplars**：`metrics` 已使用 prometheus 官方客户端，但目前仍是经典直方图分桶。

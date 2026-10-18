@@ -11,23 +11,14 @@ import (
 	"time"
 )
 
-// HTTPInvoker 基于 net/http 实现下游调用。
-//
-// 连接池由共享 Transport 提供：网关是典型的"多下游、高复用"场景，
-// 每次请求新建连接会显著放大尾延迟。
-type HTTPInvoker struct {
+// HttpInvoker 基于 net/http 实现下游调用。
+type HttpInvoker struct {
 	client   *http.Client
 	protocol string
 }
 
 // NewHTTPInvoker 创建 HTTP 调用器。
-func NewHTTPInvoker() *HTTPInvoker { return NewHTTPInvokerAs("http") }
-
-// NewHTTPInvokerAs 以指定协议名注册 HTTP 调用器。
-//
-// AI 推理服务通常也是 HTTP/SSE 接口，只是超时与并发模型不同，
-// 因此复用同一实现但使用独立协议名，便于按协议替换为专用客户端。
-func NewHTTPInvokerAs(protocol string) *HTTPInvoker {
+func NewHTTPInvoker() *HttpInvoker {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
 		DialContext: (&net.Dialer{
@@ -42,13 +33,12 @@ func NewHTTPInvokerAs(protocol string) *HTTPInvoker {
 		ExpectContinueTimeout: time.Second,
 		ForceAttemptHTTP2:     true,
 	}
-	return &HTTPInvoker{client: &http.Client{Transport: transport}, protocol: protocol}
+	return &HttpInvoker{client: &http.Client{Transport: transport}, protocol: "http"}
 }
 
-func (inv *HTTPInvoker) Protocol() string { return inv.protocol }
+func (inv *HttpInvoker) Protocol() string { return inv.protocol }
 
-// InvokeWithCtx 执行一次调用；超时由调用方通过 ctx 或 req.Timeout 控制。
-func (inv *HTTPInvoker) InvokeWithCtx(ctx context.Context, req *InvocationRequest) (*InvocationResponse, error) {
+func (inv *HttpInvoker) InvokeWithCtx(ctx context.Context, req *InvocationRequest) (*InvocationResponse, error) {
 	if req == nil || req.URL == "" {
 		return nil, fmt.Errorf("%w: 空 URL", ErrTransport)
 	}
@@ -101,7 +91,7 @@ func (inv *HTTPInvoker) InvokeWithCtx(ctx context.Context, req *InvocationReques
 	}, nil
 }
 
-var _ Invoker = (*HTTPInvoker)(nil)
+var _ Invoker = (*HttpInvoker)(nil)
 
 // IsTimeout 判断错误是否由超时引起。
 func IsTimeout(err error) bool {

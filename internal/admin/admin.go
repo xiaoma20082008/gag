@@ -3,27 +3,12 @@ package admin
 import (
 	"context"
 	"fmt"
+	"gag/internal/config"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	"gag/internal/controlplane"
 )
-
-type AdminConfig struct {
-	Mode string
-	Host string
-	Port int
-
-	ReadTimeout  int
-	WriteTimeout int
-	IdleTimeout  int
-	CloseTimeout int
-
-	MaxHeaderSize int
-	MaxBodySize   int64
-}
 
 // Deps 是管理面依赖。管理端口只做运维与控制面操作，不参与业务转发，
 // 因此依赖全部以接口/回调注入，避免 admin 反向依赖 server 造成循环。
@@ -33,7 +18,7 @@ type Deps struct {
 	// Ready 返回 nil 表示可以接收流量；为 nil 时视为就绪。
 	Ready func() error
 	// Store 是配置仓库，/admin/config 与 /admin/rollback 依赖它。
-	Store *controlplane.Store
+	Store *Store
 	// Token 是 /admin/* 的 Bearer 凭证；为空时只允许回环地址访问。
 	Token string
 	// Info 返回运行时摘要（版本、路由数等），由数据面注入。
@@ -41,7 +26,7 @@ type Deps struct {
 }
 
 type AdminServer struct {
-	cfg  *AdminConfig
+	cfg  *config.AdminConfig
 	deps Deps
 	gin  *gin.Engine
 	srv  *http.Server
@@ -84,7 +69,7 @@ func (admin *AdminServer) registerGinPost(path string, h func(ctx *gin.Context))
 	admin.gin.POST(path, h)
 }
 
-func ensureAdminConfig(cfg *AdminConfig) {
+func ensureAdminConfig(cfg *config.AdminConfig) {
 	if cfg.Mode == "" {
 		cfg.Mode = gin.ReleaseMode
 	}
@@ -108,11 +93,11 @@ func ensureAdminConfig(cfg *AdminConfig) {
 	}
 }
 
-func NewAdmin(cfg *AdminConfig) *AdminServer {
+func NewAdmin(cfg *config.AdminConfig) *AdminServer {
 	return NewAdminWith(cfg, Deps{})
 }
 
-func NewAdminWith(cfg *AdminConfig, deps Deps) *AdminServer {
+func NewAdminWith(cfg *config.AdminConfig, deps Deps) *AdminServer {
 	ensureAdminConfig(cfg)
 
 	// 1. *gin.Engine
@@ -137,7 +122,7 @@ func NewAdminWith(cfg *AdminConfig, deps Deps) *AdminServer {
 	}
 }
 
-func newGinEngine(cfg *AdminConfig) *gin.Engine {
+func newGinEngine(cfg *config.AdminConfig) *gin.Engine {
 	gin.SetMode(cfg.Mode)
 	engine := gin.New()
 	engine.Use(gin.Logger())   // 日志

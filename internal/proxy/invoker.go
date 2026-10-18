@@ -50,6 +50,8 @@ type Registry struct {
 func NewRegistry() *Registry {
 	r := &Registry{invokers: make(map[string]Invoker, 4)}
 	r.Register(NewHTTPInvoker())
+	r.Register(NewLLMInvoker())
+	r.Register(NewDubboInvoker())
 	return r
 }
 

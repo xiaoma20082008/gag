@@ -10,8 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"gag/internal/config"
-	"gag/internal/controlplane"
-	"gag/internal/observability/metrics"
+	"gag/internal/telemetry/metrics"
 )
 
 const adminTestConfig = `
@@ -19,6 +18,13 @@ version: v1
 server:
   listen: "127.0.0.1:18080"
   admin_listen: "127.0.0.1:19090"
+  discovery:
+    type: static
+    instances:
+      - tenant: t1
+        service: svc
+        cluster: c1
+        addr: 127.0.0.1:1
 tenants:
   - name: t1
     services:
@@ -30,27 +36,25 @@ tenants:
             cluster: c1
         clusters:
           - name: c1
-            instances:
-              - addr: 127.0.0.1:1
 `
 
 func newTestAdmin(t *testing.T, deps Deps) *AdminServer {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	s := NewAdminWith(&AdminConfig{Host: "127.0.0.1", Port: 19090}, deps)
+	s := NewAdminWith(&config.AdminConfig{Host: "127.0.0.1", Port: 19090}, deps)
 	if err := s.Initialize(); err != nil {
 		t.Fatalf("初始化: %v", err)
 	}
 	return s
 }
 
-func newStore(t *testing.T) *controlplane.Store {
+func newStore(t *testing.T) *Store {
 	t.Helper()
 	cfg, err := config.Load(strings.NewReader(adminTestConfig))
 	if err != nil {
 		t.Fatalf("加载配置: %v", err)
 	}
-	store := controlplane.NewStore()
+	store := NewStore()
 	if _, err := store.Publish(cfg, "test", "bootstrap"); err != nil {
 		t.Fatalf("发布初始配置: %v", err)
 	}
@@ -185,6 +189,46 @@ func TestAdminPublishAndRollback(t *testing.T) {
 
 	if got := call(s, http.MethodPost, "/admin/rollback?id=999", "", auth); got.Code != http.StatusNotFound {
 		t.Fatalf("不存在的修订应返回 404，实际 %d", got.Code)
+	}
+}
+
+// 控制面下发的 JSON 也走 ConfigLoader：Content-Type 决定用哪个 loader，
+// 默认值、校验与 YAML 完全一致。
+func TestAdminPublishJsonBody(t *testing.T) {
+	store := newStore(t)
+	s := newTestAdmin(t, Deps{Token: "secret", Store: store})
+	auth := map[string]string{
+		"Authorization": "Bearer secret",
+		"Content-Type":  "application/json",
+	}
+
+	body := `{
+  "version": "v2",
+  "server": {"listen": "127.0.0.1:18080", "admin_listen": "127.0.0.1:19090"},
+  "tenants": [{"name": "t1", "services": [{"name": "svc",
+    "routes": [{"id": "r1", "path": "/v1/orders", "cluster": "c1"}],
+    "clusters": [{"name": "c1"}]}]}]
+}`
+	ok := call(s, http.MethodPost, "/admin/config", body, auth)
+	if ok.Code != http.StatusOK {
+		t.Fatalf("JSON 发布应为 200，实际 %d: %s", ok.Code, ok.Body.String())
+	}
+	if cur := store.Current(); cur.Version != "v2" {
+		t.Fatalf("JSON 配置未生效: %+v", cur)
+	}
+
+	// JSON 同样拒绝未知字段，避免"拼错字段静默不生效"。
+	bad := call(s, http.MethodPost, "/admin/config",
+		`{"tenants": [], "typo_field": 1}`, auth)
+	if bad.Code != http.StatusBadRequest {
+		t.Fatalf("未知字段应为 400，实际 %d: %s", bad.Code, bad.Body.String())
+	}
+
+	// 未声明 Content-Type 时按 YAML 解析。JSON 是 YAML 1.2 的子集，
+	// 所以同一份内容仍然能解析成功——这不是"猜格式"，而是 YAML 本身的语法。
+	yamlOnly := map[string]string{"Authorization": "Bearer secret"}
+	if got := call(s, http.MethodPost, "/admin/config", body, yamlOnly); got.Code != http.StatusOK {
+		t.Fatalf("JSON 是 YAML 子集，缺省 Content-Type 也应解析成功，实际 %d: %s", got.Code, got.Body.String())
 	}
 }
 

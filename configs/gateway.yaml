@@ -24,6 +24,40 @@ server:
     allow_credentials: true
     max_age: 600s
 
+  # 下游实例来源：集群声明"有哪些集群"，实例回答"集群里现在有哪些节点"。
+  # 实例是运行时数据，静态场景写在这里，动态场景改 type 走 nacos/consul。
+  #
+  # 接入 nacos 时把整段换成（删掉 instances，实例改由注册中心提供）：
+  #   discovery:
+  #     type: nacos
+  #     address: nacos.internal:8848   # host:port，必填
+  #     namespace: ""                  # 命名空间，默认 public
+  #     protocol: http                 # http|https
+  #     root_path: /nacos              # 注册中心的上下文路径
+  #     log_level: warn               # debug|info|warn|error，SDK 自己的日志
+  #     timeout_ms: 5000               # 单次查询超时
+  # 约定：租户 -> nacos group，服务 -> nacos 服务名，集群 -> nacos 集群名，
+  #      只取健康且启用、权重 > 0 的实例。consul 尚未实现。
+  discovery:
+    type: static
+    instances:
+      - tenant: order
+        service: order-service
+        cluster: order-service-hz
+        addr: 127.0.0.1:9001
+      - tenant: order
+        service: order-service
+        cluster: order-service-hz
+        addr: 127.0.0.1:9002
+      - tenant: order
+        service: order-service
+        cluster: order-service-canary
+        addr: 127.0.0.1:9003
+      - tenant: ai
+        service: model-infer
+        cluster: model-infer-hz
+        addr: 127.0.0.1:9101
+
 tenants:
   - name: order
     description: 交易域
@@ -92,9 +126,6 @@ tenants:
             region: hz
             version: v1
             lb: round_robin
-            instances:
-              - addr: 127.0.0.1:9001
-              - addr: 127.0.0.1:9002
             health_check:
               path: /healthz
               interval: 10s
@@ -106,8 +137,6 @@ tenants:
             region: hz
             version: v2
             lb: least_conn
-            instances:
-              - addr: 127.0.0.1:9003
             health_check:
               path: /healthz
               interval: 10s
@@ -149,5 +178,3 @@ tenants:
             region: hz
             version: v1
             lb: least_conn
-            instances:
-              - addr: 127.0.0.1:9101

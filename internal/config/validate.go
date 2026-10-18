@@ -49,6 +49,8 @@ func Validate(c *Config) error {
 
 	tenantNames := map[string]bool{}
 	routeIDs := map[string]string{} // routeID -> tenant/service
+	// knownClusters 供 discovery 的静态实例校验引用：实例必须落在已声明的集群上。
+	knownClusters := map[string]map[string]map[string]bool{}
 	for ti, t := range c.Tenants {
 		where := fmt.Sprintf("tenants[%d]", ti)
 		if t.Name == "" {
@@ -108,18 +110,14 @@ func Validate(c *Config) error {
 				default:
 					errs.add("%s 的 lb %q 非法（round_robin|random|least_conn|consistent_hash）", cwhere, cl.LB)
 				}
-				if len(cl.Instances) == 0 {
-					errs.add("%s 未定义 instance", cwhere)
+
+				if knownClusters[t.Name] == nil {
+					knownClusters[t.Name] = map[string]map[string]bool{}
 				}
-				for ii, ins := range cl.Instances {
-					if ins.Addr == "" {
-						errs.add("%s.instances[%d].addr 不能为空", cwhere, ii)
-						continue
-					}
-					if _, _, err := net.SplitHostPort(ins.Addr); err != nil {
-						errs.add("%s.instances[%d].addr %q 需要 host:port 形式: %v", cwhere, ii, ins.Addr, err)
-					}
+				if knownClusters[t.Name][s.Name] == nil {
+					knownClusters[t.Name][s.Name] = map[string]bool{}
 				}
+				knownClusters[t.Name][s.Name][cl.Name] = true
 			}
 
 			if len(s.Routes) == 0 {
@@ -158,20 +156,6 @@ func Validate(c *Config) error {
 						errs.add("%s 引用了不存在的 cluster %q", rwhere, r.Cluster)
 					}
 				}
-				for _, sp := range r.Split {
-					targets++
-					if sp.Cluster == "" {
-						errs.add("%s.split 中存在空 cluster", rwhere)
-					} else if !clusterNames[sp.Cluster] {
-						errs.add("%s.split 引用了不存在的 cluster %q", rwhere, sp.Cluster)
-					}
-					if sp.Weight < 0 {
-						errs.add("%s.split 的 weight 不能为负", rwhere)
-					}
-					if sp.Match != nil && (sp.Match.Percentage < 0 || sp.Match.Percentage > 100) {
-						errs.add("%s.split 的 percentage 必须在 0-100 之间", rwhere)
-					}
-				}
 				if targets == 0 {
 					errs.add("%s 未指定 cluster 或 split", rwhere)
 				}
@@ -188,11 +172,79 @@ func Validate(c *Config) error {
 		}
 	}
 
+	validateDiscovery(errs, c.Server.Discovery, knownClusters)
+
 	if len(errs.Problems) > 0 {
 		sort.Strings(errs.Problems)
 		return errs
 	}
 	return nil
+}
+
+// validateDiscovery 校验实例来源。
+func validateDiscovery(errs *ValidationError, d *DiscoveryClientConfig, known map[string]map[string]map[string]bool) {
+	if d == nil {
+		return
+	}
+	switch d.Type {
+	case "static":
+	case "nacos":
+		validateNacosDiscovery(errs, d)
+	case "consul":
+		if d.Address == "" {
+			errs.add("server.discovery.type=consul 需要 address")
+		}
+	default:
+		errs.add("server.discovery.type %q 非法（static|nacos|consul）", d.Type)
+		return
+	}
+
+	for ii, ins := range d.Instances {
+		where := fmt.Sprintf("server.discovery.instances[%d]", ii)
+		if d.Type != "static" {
+			errs.add("%s 只在 type=static 下有效（type=%s 的实例来自注册中心）", where, d.Type)
+			continue
+		}
+		if ins.Tenant == "" || ins.Service == "" || ins.Cluster == "" {
+			errs.add("%s 需要 tenant/service/cluster 三跳定位", where)
+			continue
+		}
+		if known[ins.Tenant] == nil || known[ins.Tenant][ins.Service] == nil ||
+			!known[ins.Tenant][ins.Service][ins.Cluster] {
+			errs.add("%s 指向未声明的集群 %s/%s/%s", where, ins.Tenant, ins.Service, ins.Cluster)
+			continue
+		}
+		if ins.Addr == "" {
+			errs.add("%s.addr 不能为空", where)
+			continue
+		}
+		if _, _, err := net.SplitHostPort(ins.Addr); err != nil {
+			errs.add("%s.addr %q 需要 host:port 形式: %v", where, ins.Addr, err)
+		}
+	}
+}
+
+// validateNacosDiscovery 校验 nacos 注册中心连接参数。
+//
+// 这些字段直接进 SDK 的 ClientConfig/ServerConfig，错值的表现是
+// SDK 内部报错或莫名其妙连不上，很难从网关侧定位，因此在入口拦掉。
+func validateNacosDiscovery(errs *ValidationError, d *DiscoveryClientConfig) {
+	switch d.Protocol {
+	case "", "http", "https":
+	default:
+		errs.add("server.discovery.protocol %q 非法（http|https）", d.Protocol)
+	}
+	switch d.LogLevel {
+	case "", "debug", "info", "warn", "error":
+	default:
+		errs.add("server.discovery.log_level %q 非法（debug|info|warn|error）", d.LogLevel)
+	}
+	if d.TimeoutMs < 0 {
+		errs.add("server.discovery.timeout_ms 不能为负")
+	}
+	if d.RootPath != "" && !strings.HasPrefix(d.RootPath, "/") {
+		errs.add("server.discovery.root_path %q 需要以 / 开头（nacos ContextPath）", d.RootPath)
+	}
 }
 
 func validatePolicies(errs *ValidationError, where string, auth *AuthPolicy, v *ValidatePolicy, rl *RateLimitPolicy, br *BreakerPolicy, rt *RetryPolicy) {

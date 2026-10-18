@@ -20,11 +20,10 @@ import (
 	"time"
 
 	"gag/internal/config"
-	"gag/internal/gateway"
-	"gag/internal/modules"
-	"gag/internal/observability/logging"
-	"gag/internal/observability/metrics"
 	"gag/internal/proxy"
+	"gag/internal/router"
+	"gag/internal/telemetry/logging"
+	"gag/internal/telemetry/metrics"
 )
 
 // ServerConfig 是数据面服务的监听与超时参数。
@@ -68,7 +67,7 @@ type GagServer struct {
 	applyMu sync.Mutex
 	state   atomic.Pointer[State]
 	// chain 与 state 成对替换：请求要么看到旧的完整组合，要么看到新的。
-	chain atomic.Pointer[gateway.Chain]
+	chain atomic.Pointer[router.Chain]
 }
 
 // NewGag 构建数据面服务；此时尚未开始监听。
@@ -114,7 +113,7 @@ func (s *GagServer) Apply(snap *config.Snapshot) error {
 	}
 
 	serverCfg := snap.Config().Server
-	chain, err := modules.Build(modules.Options{
+	chain, err := router.Build(router.Options{
 		State:    state,
 		Logger:   s.deps.Logger,
 		Metrics:  s.deps.Metrics,
@@ -123,6 +122,7 @@ func (s *GagServer) Apply(snap *config.Snapshot) error {
 		IPDeny:   serverCfg.IPDeny,
 		CORS:     serverCfg.CORS,
 		Invokers: s.deps.Invokers,
+		Source:   state.Source(),
 	})
 	if err != nil {
 		return err
@@ -179,4 +179,4 @@ func (s *GagServer) Listener() net.Listener {
 func (s *GagServer) State() *State { return s.state.Load() }
 
 // Chain 返回当前生效的治理链；未应用配置时为 nil。
-func (s *GagServer) Chain() *gateway.Chain { return s.chain.Load() }
+func (s *GagServer) Chain() *router.Chain { return s.chain.Load() }

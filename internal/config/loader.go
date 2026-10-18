@@ -2,40 +2,117 @@ package config
 
 import (
 	"bytes"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultListen 是未显式配置监听地址时的默认值。
-const DefaultListen = ":8080"
+type Format string
 
-// DefaultAdminListen 是未显式配置管理端口时的默认值。
-//
-// 默认只绑回环：管理面暴露配置下发与回滚能力，不应随业务端口一起对外。
-const DefaultAdminListen = "127.0.0.1:9090"
+const (
+	FormatYAML Format = "yaml"
+	FormatJSON Format = "json"
+)
 
-// LoadFile 从文件加载配置。
-func LoadFile(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("读取配置文件 %s: %w", path, err)
+type ConfigLoader interface {
+	Load(path string) (*Config, error)
+}
+
+type Decoder interface {
+	Decode(r io.Reader) (*Config, error)
+}
+
+type YamlLoader struct{}
+type JsonLoader struct{}
+
+func (l *YamlLoader) Load(path string) (*Config, error) { return loadFile(path, l.Decode) }
+
+func (l *JsonLoader) Load(path string) (*Config, error) { return loadFile(path, l.Decode) }
+
+func (l *YamlLoader) Decode(r io.Reader) (*Config, error) { return decode(r, parseYAML) }
+
+func (l *JsonLoader) Decode(r io.Reader) (*Config, error) { return decode(r, parseJSON) }
+
+// NewLoader 按扩展名选择 loader：.yaml/.yml → YAML，.json → JSON。
+func NewLoader(path string) (ConfigLoader, error) {
+	ext := strings.ToLower(filepath.Ext(path))
+	switch ext {
+	case ".yaml", ".yml":
+		return &YamlLoader{}, nil
+	case ".json":
+		return &JsonLoader{}, nil
+	case "":
+		return nil, fmt.Errorf("配置文件 %q 没有扩展名，无法判断格式（支持 .yaml/.yml/.json）", path)
+	default:
+		return nil, fmt.Errorf("配置文件 %q 的格式 %q 不受支持（支持 .yaml/.yml/.json）", path, ext)
 	}
-	cfg, err := Load(bytes.NewReader(data))
+}
+
+func LoaderFor(format Format) (ConfigLoader, error) {
+	switch Format(strings.ToLower(strings.TrimSpace(string(format)))) {
+	case FormatYAML, "":
+		return &YamlLoader{}, nil
+	case FormatJSON:
+		return &JsonLoader{}, nil
+	default:
+		return nil, fmt.Errorf("不支持的配置格式 %q（支持 yaml/json）", format)
+	}
+}
+
+func LoadFile(path string) (*Config, error) {
+	loader, err := NewLoader(path)
 	if err != nil {
-		return nil, fmt.Errorf("解析配置文件 %s: %w", path, err)
+		return nil, err
+	}
+	return loader.Load(path)
+}
+
+// Load 从 reader 解析 YAML 配置。
+//
+// 保留这个函数是因为绝大多数调用方（测试、控制面 body）手里只有字节流：
+// 它等价于 (&YamlLoader{}).Decode(r)，不构成第二条解析路径。
+func Load(r io.Reader) (*Config, error) { return (&YamlLoader{}).Decode(r) }
+
+// parse 是格式相关的解析步骤：只负责把字节变成 Config，不碰默认值与校验。
+type parse func(io.Reader) (*Config, error)
+
+// decode 是唯一的流水线：解析 → 默认值 → 校验。
+func decode(r io.Reader, p parse) (*Config, error) {
+	cfg, err := p(r)
+	if err != nil {
+		return nil, err
+	}
+	ApplyDefaults(cfg)
+	if err := Validate(cfg); err != nil {
+		return nil, err
 	}
 	return cfg, nil
 }
 
-// Load 解析 YAML 配置，应用默认值并做完整校验。
-//
-// 使用 strict 解码：拼错的字段会直接报错，避免"配置静默不生效"。
-func Load(r io.Reader) (*Config, error) {
+// loadFile 打开文件并走同一条流水线；错误里带上路径，
+// 因为调用方手里通常只有一个路径，没有更多上下文。
+func loadFile(path string, p parse) (*Config, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取配置文件 %s: %w", path, err)
+	}
+	defer f.Close()
+
+	cfg, err := decode(f, p)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// parseYAML 用 strict 解码：拼错的字段会直接报错，避免"配置静默不生效"。
+func parseYAML(r io.Reader) (*Config, error) {
 	dec := yaml.NewDecoder(r)
 	dec.KnownFields(true)
 
@@ -46,9 +123,21 @@ func Load(r io.Reader) (*Config, error) {
 		}
 		return nil, err
 	}
+	return &cfg, nil
+}
 
-	ApplyDefaults(&cfg)
-	if err := Validate(&cfg); err != nil {
+// parseJSON 同样拒绝未知字段，与 YAML 的 KnownFields(true) 对齐。
+func parseJSON(r io.Reader) (*Config, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return nil, errors.New("配置为空")
+	}
+
+	var cfg Config
+	if err := json.Unmarshal(data, &cfg, json.RejectUnknownMembers(true)); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -83,6 +172,8 @@ func ApplyDefaults(c *Config) {
 		}
 	}
 
+	applyDiscoveryDefaults(c)
+
 	for ti := range c.Tenants {
 		t := &c.Tenants[ti]
 		for si := range t.Services {
@@ -103,11 +194,6 @@ func ApplyDefaults(c *Config) {
 					cl.HealthCheck = &HealthCheckPolicy{}
 				}
 				applyHealthDefaults(cl.HealthCheck)
-				for ii := range cl.Instances {
-					if cl.Instances[ii].Weight <= 0 {
-						cl.Instances[ii].Weight = 1
-					}
-				}
 			}
 			for ri := range s.Routes {
 				r := &s.Routes[ri]
@@ -126,11 +212,6 @@ func ApplyDefaults(c *Config) {
 				}
 				if r.Retry != nil {
 					applyRetryDefaults(r.Retry)
-				}
-				for si := range r.Split {
-					if r.Split[si].Weight == 0 && r.Split[si].Match == nil {
-						r.Split[si].Weight = 1
-					}
 				}
 			}
 		}
@@ -228,7 +309,28 @@ func applyHealthDefaults(p *HealthCheckPolicy) {
 	}
 }
 
-// 保证 Duration 常量在编译期可见，避免魔法数字散落。
-const (
-	second = Duration(1e9)
-)
+func applyDiscoveryDefaults(c *Config) {
+	if c.Server.Discovery == nil {
+		c.Server.Discovery = &DiscoveryClientConfig{Type: "static"}
+	}
+	d := c.Server.Discovery
+	if d.Type == "" {
+		d.Type = "static"
+	}
+	if d.Type == "nacos" {
+		if d.Protocol == "" {
+			d.Protocol = "http"
+		}
+		if d.LogLevel == "" {
+			d.LogLevel = "warn"
+		}
+		if d.TimeoutMs <= 0 {
+			d.TimeoutMs = 5000
+		}
+	}
+	for i := range d.Instances {
+		if d.Instances[i].Weight <= 0 {
+			d.Instances[i].Weight = 1
+		}
+	}
+}

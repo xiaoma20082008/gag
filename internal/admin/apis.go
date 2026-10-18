@@ -13,7 +13,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"gag/internal/config"
-	"gag/internal/controlplane"
 )
 
 func (admin *AdminServer) registerRouters() {
@@ -128,7 +127,19 @@ func (admin *AdminServer) publishConfig(c *gin.Context) {
 		writeJSON(c, http.StatusBadRequest, gin.H{"error": "读取请求体失败: " + err.Error()})
 		return
 	}
-	cfg, err := config.Load(bytes.NewReader(body))
+	// 控制面下发的配置同样走 ConfigLoader：格式按 Content-Type 选，
+	// 解析、默认值、校验与磁盘配置完全一致，不另起一条宽松路径。
+	loader, err := config.LoaderFor(config.Format(formatOf(c.ContentType())))
+	if err != nil {
+		writeJSON(c, http.StatusUnsupportedMediaType, gin.H{"error": err.Error()})
+		return
+	}
+	decoder, ok := loader.(config.Decoder)
+	if !ok {
+		writeJSON(c, http.StatusInternalServerError, gin.H{"error": "loader 不支持内存解析"})
+		return
+	}
+	cfg, err := decoder.Decode(bytes.NewReader(body))
 	if err != nil {
 		// 校验失败必须挡在这里：一旦进 Store，数据面就会整体拒绝热加载。
 		writeJSON(c, http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -166,7 +177,7 @@ func (admin *AdminServer) rollback(c *gin.Context) {
 	ver, err := admin.deps.Store.Rollback(id, headerOr(c, "X-Admin-User", "api"))
 	if err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, controlplane.ErrVersionNotFound) {
+		if errors.Is(err, ErrVersionNotFound) {
 			status = http.StatusNotFound
 		}
 		writeJSON(c, status, gin.H{"error": err.Error()})
@@ -177,6 +188,17 @@ func (admin *AdminServer) rollback(c *gin.Context) {
 		"version":  ver.Version,
 		"hash":     ver.Hash,
 	})
+}
+
+// formatOf 把 Content-Type 折算成配置格式。
+//
+// 只有显式声明 JSON 才走 JSON，其余（含空、text/plain、application/yaml）
+// 一律按 YAML 处理：配置的主体形态是 YAML，默认值不该让调用方踩坑。
+func formatOf(contentType string) config.Format {
+	if strings.Contains(strings.ToLower(contentType), "json") {
+		return config.FormatJSON
+	}
+	return config.FormatYAML
 }
 
 func headerOr(c *gin.Context, name, fallback string) string {
