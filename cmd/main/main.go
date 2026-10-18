@@ -24,20 +24,33 @@ func main() {
 }
 
 func run() error {
-	configPath := flag.String("c", "configs/gateway.yaml", "配置文件路径")
+	configType := flag.String("t", "file", "配置中心类型")
+	configMeta := flag.String("m", "configs/gateway.yaml", "配置中心路径")
 	flag.Parse()
 
-	client, err := config.NewFileConfigClient(&config.ConfigClientConfig{
-		Type: "file",
-		Path: *configPath,
-	})
-	if err != nil {
-		return err
+	cfg := &config.ConfigClientConfig{
+
+		Type: *configType,
+		Meta: *configMeta,
+
+		LogLevel: "info",
+
+		// file
+		Path:     *configMeta,
+		Format:   "yaml",
+		Interval: 1,
+
+		// nacos
+		Namespace: "public",
+		Group:     "gag",
+		DataId:    "gateway.yaml",
+		Protocol:  "http",
+		RootPath:  "/nacos",
+		TimeoutMs: 5000,
 	}
 
-	gw, err := gateway.New(client)
+	gw, err := gateway.New(cfg)
 	if err != nil {
-		_ = client.Close()
 		return err
 	}
 

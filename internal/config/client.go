@@ -26,16 +26,16 @@ type ConfigClient interface {
 	Close() error
 }
 
-func NewConfigClient(kind string) (ConfigClient, error) {
+func NewConfigClient(ccc *ConfigClientConfig) (ConfigClient, error) {
 	var configClient ConfigClient
 	var err error
-	switch kind {
+	switch ccc.Type {
 	case "file":
-		configClient, err = NewFileConfigClient(&ConfigClientConfig{})
+		configClient, err = NewFileConfigClient(ccc)
 	case "nacos":
-		configClient, err = NewNacosConfigClient(&ConfigClientConfig{})
+		configClient, err = NewNacosConfigClient(ccc)
 	default:
-		return nil, fmt.Errorf("unknown config type: '%s'", kind)
+		return nil, fmt.Errorf("unknown config type: '%s'", ccc.Type)
 	}
 	if err != nil {
 		return nil, err

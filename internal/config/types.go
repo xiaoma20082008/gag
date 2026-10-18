@@ -152,14 +152,16 @@ type DiscoveryClientConfig struct {
 type ConfigClientConfig struct {
 	// Type 决定配置来源：file（本地文件）、nacos、apollo。
 	Type string `yaml:"type" json:"type"`
+	// Meta 是 type=file 时的配置文档路径，type=nacos 时的服务器地址。
+	Meta string
+
 	// Path 是 type=file 时的配置文档路径，同时作为默认 key。
 	Path string `yaml:"path" json:"path"`
 	// Format 是文档格式 yaml|json；为空时按 Path（或 key）的扩展名推断。
 	Format string `yaml:"format" json:"format"`
 	// Interval 是 type=file 的轮询间隔，默认 1s。
-	// 用轮询而不是 fsnotify：容器里挂载的 ConfigMap 更新时 mtime 变化、
-	// inode 替换等各种情形不一致，轮询比较内容反而最稳。
 	Interval Duration `yaml:"interval" json:"interval"`
+
 	// Address 是 "host:port" 的紧凑形式，Host/Port 分开写更显式。
 	Host    string `yaml:"host" json:"host"`
 	Port    int    `yaml:"port" json:"port"`
@@ -174,10 +176,11 @@ type ConfigClientConfig struct {
 	Protocol string `yaml:"protocol" json:"protocol"`
 	// RootPath 是配置中心的上下文路径（nacos 的 ContextPath，默认 /nacos）。
 	RootPath string `yaml:"root_path" json:"root_path"`
-	// LogLevel 是 SDK 自己的日志级别：debug|info|warn|error，默认 warn。
-	LogLevel string `yaml:"log_level" json:"log_level"`
 	// TimeoutMs 是单次拉取超时，默认 5000 毫秒。
 	TimeoutMs int `yaml:"timeout_ms" json:"timeout_ms"`
+
+	// LogLevel 是 SDK 自己的日志级别：debug|info|warn|error，默认 warn。
+	LogLevel string `yaml:"log_level" json:"log_level"`
 }
 
 // Endpoint 统一 address 与 host/port 两种写法，与 DiscoveryClientConfig 保持一致。

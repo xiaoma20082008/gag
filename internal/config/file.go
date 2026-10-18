@@ -33,15 +33,13 @@ func NewFileConfigClient(cfg *ConfigClientConfig) (*FileConfigClient, error) {
 	if cfg == nil {
 		return nil, errors.New("config: file 客户端配置为 nil")
 	}
-	// 类型写错说明装配代码接错了分支，早报比跑起来再查强。
 	if cfg.Type != "" && cfg.Type != "file" {
 		return nil, fmt.Errorf("config: file 客户端收到 type=%q", cfg.Type)
 	}
-	path := strings.TrimSpace(cfg.Path)
+	path := strings.TrimSpace(cfg.Meta)
 	if path == "" {
 		return nil, errors.New("config: type=file 需要 path")
 	}
-	// 格式也在这里校验：扩展名不支持不该拖到第一次 Get 才暴露。
 	if _, err := FormatOf(path); err != nil {
 		return nil, err
 	}

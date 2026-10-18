@@ -36,12 +36,12 @@ type Gateway struct {
 	invokers *proxy.Registry
 
 	// cc 配置中心客户端
-	cc     config.ConfigClient
-	key    string
-	format config.Format
+	cc  config.ConfigClient
+	ccc *config.ConfigClientConfig
 
 	// dc 注册中心客户端
-	dc discovery.DiscoveryClient
+	dc  discovery.DiscoveryClient
+	dcc *config.DiscoveryClientConfig
 
 	manager *script.ScriptManager
 
@@ -60,9 +60,9 @@ type Gateway struct {
 	closeErr  error
 }
 
-func New(cc config.ConfigClient) (*Gateway, error) {
+func New(ccc *config.ConfigClientConfig) (*Gateway, error) {
 	g := &Gateway{
-		cc: cc,
+		ccc: ccc,
 	}
 	if err := g.Initialize(); err != nil {
 		_ = g.Close()
@@ -76,6 +76,11 @@ func (g *Gateway) Initialize() error {
 	if g.Data != nil || g.Admin != nil {
 		return errors.New("gateway: 已装配，不能重复 Initialize")
 	}
+	cc, err := config.NewConfigClient(g.ccc)
+	if err != nil {
+		return err
+	}
+	g.cc = cc
 	if err := g.loadConfig(); err != nil {
 		return err
 	}
@@ -114,7 +119,6 @@ func (g *Gateway) Initialize() error {
 	return nil
 }
 
-// loadConfig 从配置来源取文档并冻结成快照。
 func (g *Gateway) loadConfig() error {
 	raw := g.cc.Get(context.Background(), AppId, "")
 	if strings.TrimSpace(raw) == "" {
