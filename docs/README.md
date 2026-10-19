@@ -248,7 +248,8 @@ Post 阶段在下游调用返回后做后置处理，并统一输出访问日志
 
 灰度设计要求：
 
-- 需要 route 层支持流量匹配与 split
+- route 层要能用 `rule` 表达确定性分流（header / cookie / IP / tenant），
+  百分比分流交给 lb 的实例权重，见 ROUTING.md §8.2
 - 每个灰度变更都要绑定 trace tag / metrics tag，便于观察效果
 - 灰度发布必须具备快速回滚能力，不强依赖代码发布
 
@@ -471,5 +472,7 @@ AI 服务天然具有高延迟和长尾特征，因此需要具备异步化能�
 ## 参考文档
 
 - [路由设计](./ROUTING.md)
+- [模块与请求处理设计](./MODULES.md)
 - [DSL设计](../pkg/mk/README.md)
 - [运维手册](./OPERATIONS.md)
+- [实现说明](../internal/README.md)

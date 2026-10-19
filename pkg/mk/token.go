@@ -17,6 +17,7 @@ const (
 
 	IDENT
 	INT
+	DECIMAL
 	STRING
 
 	// 运算符

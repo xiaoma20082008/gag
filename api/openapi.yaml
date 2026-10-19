@@ -1,0 +1,184 @@
+openapi: 3.0.3
+info:
+  title: Gag Gateway Admin API
+  version: v1
+  description: |
+    数据面（业务端口）不提供管理接口，本文件只描述管理端口暴露的运维与
+    控制面接口。错误响应统一为 code / message / request_id / trace_id 结构，
+    与数据面保持一致。
+
+servers:
+  - url: http://127.0.0.1:9090
+    description: 默认管理端口（只绑回环）
+
+tags:
+  - name: probe
+    description: 探针与指标，供 K8s / Prometheus 抓取，不鉴权
+  - name: control
+    description: 控制面接口，会改变数据面行为，需要 Bearer Token
+
+paths:
+  /healthz:
+    get:
+      tags: [probe]
+      summary: 存活探针
+      responses:
+        "200":
+          description: 进程存活
+          content:
+            text/plain:
+              schema: { type: string, example: ok }
+
+  /readyz:
+    get:
+      tags: [probe]
+      summary: 就绪探针
+      description: 数据面尚未装载配置时返回 503，K8s 据此把实例摘出流量。
+      responses:
+        "200":
+          description: 可以接收流量
+          content:
+            text/plain:
+              schema: { type: string, example: ready }
+        "503":
+          description: 配置未装载
+
+  /metrics:
+    get:
+      tags: [probe]
+      summary: Prometheus 指标
+      responses:
+        "200":
+          description: Prometheus 文本格式
+          content:
+            text/plain:
+              schema: { type: string }
+
+  /admin/status:
+    get:
+      tags: [control]
+      summary: 运行时摘要
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 版本、路由数、租户数、当前修订号
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /admin/config:
+    get:
+      tags: [control]
+      summary: 读取当前生效的配置
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: 当前配置（YAML 文本）
+          content:
+            text/yaml:
+              schema: { type: string }
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+    post:
+      tags: [control]
+      summary: 发布新配置
+      description: |
+        配置先经过严格解析与语义校验，失败时返回 400 且数据面保持旧配置不变；
+        成功后生成新修订号，数据面原子替换治理链。
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          text/yaml:
+            schema: { type: string }
+      responses:
+        "200":
+          description: 发布成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Revision"
+        "400":
+          description: 配置非法
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /admin/rollback:
+    post:
+      tags: [control]
+      summary: 回滚到指定修订
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id: { type: integer, format: int64, description: 修订号 }
+      responses:
+        "200":
+          description: 回滚成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Revision"
+        "404":
+          description: 修订不存在
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        由 server.admin_token 配置。未配置时只允许回环地址访问控制面接口。
+
+  responses:
+    Unauthorized:
+      description: 缺少或错误的 Bearer Token
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Revision:
+      type: object
+      properties:
+        id: { type: integer, format: int64 }
+        version: { type: string }
+        hash: { type: string }
+        author: { type: string }
+        comment: { type: string }
+        created_at: { type: string, format: date-time }
+
+    Error:
+      type: object
+      description: 与数据面统一的错误结构
+      properties:
+        code:
+          type: string
+          example: invalid_argument
+        message:
+          type: string
+        request_id:
+          type: string
+        trace_id:
+          type: string

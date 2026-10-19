@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-const EOI = 0
+const EOI byte = 0
 
 type Lexer struct {
 	filename string
@@ -249,8 +249,7 @@ func (l *Lexer) readToken() Token {
 			kind = LookupIdentKind(lit)
 			shouldAdvance = false
 		} else if isDigit(l.ch) {
-			kind = INT
-			lit = l.readInt()
+			kind, lit = l.readNum()
 			shouldAdvance = false
 		} else {
 			line, column = l.LineMap(startPos)
@@ -366,12 +365,64 @@ func (l *Lexer) readComment(multi bool) (string, bool) {
 	return ret, true
 }
 
-func (l *Lexer) readInt() string {
+// readNum 读取数字，支持 123; 3.14; 1e-5; 3.14E+10
+func (l *Lexer) readNum() (TokenType, string) {
 	p := l.pos
+	kind := INT
+
+	// 1.整数: 123
 	for isDigit(l.ch) {
 		l.readChar()
 	}
-	return l.input[p:l.pos]
+
+	// 2.小数: 3.14
+	if l.ch == '.' && isDigit(l.peekChar()) {
+		kind = DECIMAL
+		l.readChar() // '.'
+
+		for isDigit(l.ch) {
+			l.readChar()
+		}
+	}
+
+	// 3.科学计数法: 1e-5, 3.14E+10
+	if l.ch == 'e' || l.ch == 'E' {
+		epos := l.pos
+
+		sign := false
+		if l.ch == '+' || l.ch == '-' {
+			sign = true
+		}
+		next := EOI
+		if sign {
+			if l.readPos+1 < len(l.input) {
+				next = l.input[l.readPos+1]
+			}
+		} else {
+			next = l.peekChar()
+		}
+
+		if isDigit(next) {
+			kind = DECIMAL
+			l.readChar() // skip 'e','E'
+			if sign {
+				l.readChar() // skip '+','-'
+			}
+
+			for isDigit(l.ch) {
+				l.readChar()
+			}
+
+		} else {
+			line, col := l.LineMap(epos)
+			l.errors.Report(ErrInvalidChar, line, col, string(l.ch))
+			kind = ERR
+			l.readChar()
+		}
+
+	}
+
+	return kind, l.input[p:l.pos]
 }
 
 func (l *Lexer) readIdent() string {

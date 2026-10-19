@@ -1,0 +1,104 @@
+# 本地依赖编排：注册中心 + 存储。
+#
+# 网关本体默认不在 compose 里跑，用 `go run ./cmd/main` 直接跑在宿主机上：
+# configs/gateway.yaml 里的静态实例写的是 127.0.0.1:9001/9002，
+# 容器内的 127.0.0.1 指向容器自己，把网关塞进容器后这些地址会全部打空。
+# 要容器化网关，把下面的 gag 服务放开，并把 discovery 换成 nacos
+# （服务名用 nacos，端口 8848），实例地址改用 compose 服务名。
+#
+#   docker compose -f build/docker-compose.yaml up -d
+
+name: gag
+
+services:
+  # Nacos 2.x：discovery.type=nacos 时的注册中心。
+  # 单机模式 + 内嵌 derby，只用于本地开发，不要照搬到生产。
+  nacos:
+    image: nacos/nacos-server:v2.4.3
+    container_name: gag-nacos
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "false"
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+    ports:
+      - "8848:8848"   # HTTP（OpenAPI / 控制台）
+      - "9848:9848"   # gRPC（2.x 客户端必须，比主端口大 1000）
+    volumes:
+      - nacos-data:/home/nacos/data
+      - nacos-logs:/home/nacos/logs
+    healthcheck:
+      # 控制台首页能出 200 才算起来；nacos 启动慢，给足重试次数。
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8848/nacos/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+
+  # Redis：限流计数器 / 缓存（internal/storage/redis.go）。
+  redis:
+    image: redis:7.4-alpine
+    container_name: gag-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # MySQL：控制面元数据（配置修订、审计）持久化（internal/storage/mysql.go）。
+  mysql:
+    image: mysql:8.4
+    container_name: gag-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: gag-root
+      MYSQL_DATABASE: gag
+      MYSQL_USER: gag
+      MYSQL_PASSWORD: gag
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --default-time-zone=+08:00
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ugag", "-pgag"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+
+  # 网关本体。默认注释掉，原因见文件头。
+  #
+  # gag:
+  #   build:
+  #     context: ..
+  #     dockerfile: build/Dockerfile
+  #   image: gag:local
+  #   container_name: gag
+  #   depends_on:
+  #     nacos:
+  #       condition: service_healthy
+  #   ports:
+  #     - "8080:8080"        # 数据平面
+  #     - "9090:9090"        # 控制平面（对外暴露时务必设 admin_token）
+  #   volumes:
+  #     - ../configs/gateway.yaml:/etc/gag/gateway.yaml:ro
+  #   command: ["-config", "/etc/gag/gateway.yaml"]
+  #   restart: unless-stopped
+
+volumes:
+  nacos-data:
+  nacos-logs:
+  redis-data:
+  mysql-data:
