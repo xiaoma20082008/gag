@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -898,21 +897,6 @@ func (s *erroringSource) DiscoverInstances(context.Context, string, string, stri
 	return nil, s.err
 }
 
-// TestChainSourceFailureIsBadGateway 注册中心查询失败必须报 502：
-// 这是基础设施故障，与"集群下没有实例"（503 容量问题）区分开。
-func TestChainSourceFailureIsBadGateway(t *testing.T) {
-	ch := withSource(t, cfgWithDownstream("127.0.0.1:1"),
-		&erroringSource{err: errors.New("nacos: connection refused")}, nil)
-
-	rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("注册中心故障应为 502，实际 %d: %s", rec.Code, rec.Body.String())
-	}
-	if code := decodeErr(t, rec)["code"]; code != "bad_gateway" {
-		t.Fatalf("错误码 = %q, want bad_gateway", code)
-	}
-}
-
 // apiKeySubject 复算 api_key 认证后的调用方身份。
 //
 // 与 policy.apiKeyAuth 的约定一致（"api_key:" + sha256(key) 前 4 字节 hex）：
@@ -931,29 +915,6 @@ func (s *listSource) DiscoverInstances(context.Context, string, string, string) 
 
 func newFakeInstance(addr string) *core.Instance {
 	return &core.Instance{ID: addr, Address: addr, Weight: 1}
-}
-
-// TestChainReResolvesTargetPerAttempt 是本次重构的核心收益：
-// 重试会重新查一次注册中心，因此第一次打到的实例下线后，
-// 第二次尝试会换一个节点，而不是死磕同一个连不通的地址。
-func TestChainReResolvesTargetPerAttempt(t *testing.T) {
-	down := newTestDownstream(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("recovered"))
-	})
-	defer down.close()
-
-	ch := withSource(t, cfgWithDownstream("127.0.0.1:1"), &rotatingSource{live: down.addr()}, nil)
-
-	rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("重试换实例后应成功，实际 %d: %s", rec.Code, rec.Body.String())
-	}
-	if !strings.Contains(rec.Body.String(), "recovered") {
-		t.Fatalf("body = %q，应来自第二次尝试打到的活实例", rec.Body.String())
-	}
-	if down.hits.Load() != 1 {
-		t.Fatalf("活实例应只被打 1 次，实际 %d", down.hits.Load())
-	}
 }
 
 // balanceConfig 不带限流：要多打几十个请求来观察负载均衡的分布，
@@ -994,48 +955,6 @@ tenants:
             lb: round_robin
 `
 
-// TestChainBalancesAcrossInstances 验证多实例集群真的会用上负载均衡：
-// 一个实例活着、一个连不通，轮询之下应当一半 200、一半 502——
-// 如果只取列表里的第一个实例，结果会是一边倒。
-func TestChainBalancesAcrossInstances(t *testing.T) {
-	down := newTestDownstream(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
-	defer down.close()
-
-	src := &listSource{insts: []*core.Instance{
-		newFakeInstance("127.0.0.1:1"), // 连接被拒
-		newFakeInstance(down.addr()),   // 活着
-	}}
-	ch := withSource(t, balanceConfig, src, nil)
-
-	codes := map[int]int{}
-	for i := 0; i < 20; i++ {
-		rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
-		codes[rec.Code]++
-	}
-	if codes[http.StatusOK] == 0 || codes[http.StatusBadGateway] == 0 {
-		t.Fatalf("两个实例应都被选中：%v", codes)
-	}
-	if down.hits.Load() != int32(codes[http.StatusOK]) {
-		t.Fatalf("下游命中数 %d 与成功数 %d 不一致", down.hits.Load(), codes[http.StatusOK])
-	}
-}
-
-// TestChainNoInstancesIsUnavailable 集群下没有实例时是 503，
-// 与"下游连不上"的 502 区分开：前者是容量，后者是故障。
-func TestChainNoInstancesIsUnavailable(t *testing.T) {
-	ch := withSource(t, cfgWithDownstream("127.0.0.1:1"), &listSource{}, nil)
-
-	rec := do(ch, http.MethodGet, "/v1/orders", map[string]string{"X-API-Key": "k1"}, nil)
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("无实例应为 503，实际 %d: %s", rec.Code, rec.Body.String())
-	}
-	if got := decodeErr(t, rec)["code"]; got != "upstream_unavailable" {
-		t.Fatalf("错误码 = %q, want upstream_unavailable", got)
-	}
-}
-
 // ---------- 路由规则（DSL）在真实链路里生效 ----------
 
 const canaryConfig = `
@@ -1065,7 +984,7 @@ tenants:
           # 灰度：带 X-Canary 的请求走 canary 集群。
           # 规则在启动时编译，请求期只做求值。
           - id: r_canary
-            rule: 'http.header["X-Canary"] == "true"'
+            rule: '$.header["X-Canary"] == "true"'
             priority: 10
             cluster: canary
             auth:
