@@ -10,7 +10,6 @@ import (
 	"gag/internal/config"
 )
 
-// 查找链错误：调用方据此区分"请求不该进来"与"基础设施不可用"。
 var (
 	// ErrTenantNotFound 请求指定的租户不存在。
 	ErrTenantNotFound = errors.New("core: tenant not found")
@@ -56,9 +55,6 @@ type Instance struct {
 }
 
 // Decision 是路由期的查找结果：请求属于哪条路由、哪个服务。
-//
-// 它刻意保留配置原文（Route / ServiceCfg）：集群与实例要到调用期
-// 才能确定，届时还需要分流规则与集群表，重新查一遍配置没有必要。
 type Decision struct {
 	Tenant     string
 	Service    string

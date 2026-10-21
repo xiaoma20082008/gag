@@ -197,9 +197,6 @@ func (r *Response) WriteTo(w http.ResponseWriter) {
 }
 
 // DefaultErrorResponse 生成标准错误响应体。
-//
-// 响应结构固定为 code/message/request_id/trace_id，便于客户端与网关日志对齐。
-// 由 Chain 的 finalize 调用，也可被模块主动用于把结构化错误转成响应。
 func DefaultErrorResponse(c *RequestContext, err *gerr.Error) {
 	if err == nil {
 		err = gerr.New(gerr.CodeInternal, "unknown error")

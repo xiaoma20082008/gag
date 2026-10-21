@@ -34,8 +34,6 @@ func (client *NacosDiscoveryClient) DiscoverInstances(ctx context.Context, tenan
 		if len(instances) > 0 {
 			return client.mapToInstances(instances), nil
 		}
-		// SDK 对"服务下没有实例"返回空切片 + error；这是容量问题，不是故障，
-		// 交给调用期按"没有可用实例"处理（503），不要升级成 502。
 		if isNoInstanceErr(err) {
 			return nil, nil
 		}
@@ -87,8 +85,6 @@ func getNacosCacheDir() string {
 	return filepath.Join(os.TempDir(), "gag", "nacos", "cache")
 }
 
-const defaultTimeoutMs = 5000
-
 func NewNacosDiscoveryClient(cfg *config.DiscoveryClientConfig) (*NacosDiscoveryClient, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("discovery: nacos 客户端配置为 nil")
@@ -99,7 +95,7 @@ func NewNacosDiscoveryClient(cfg *config.DiscoveryClientConfig) (*NacosDiscovery
 		return nil, err
 	}
 	if cfg.TimeoutMs <= 0 {
-		cfg.TimeoutMs = defaultTimeoutMs
+		cfg.TimeoutMs = 5000
 	}
 
 	protocol := cfg.Protocol

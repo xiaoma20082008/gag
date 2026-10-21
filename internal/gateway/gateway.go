@@ -45,9 +45,9 @@ type Gateway struct {
 
 	manager *script.ScriptManager
 
-	// Data 数据平面（业务端口）。
+	// Data 数据平面
 	Data *server.GagServer
-	// Admin 控制平面（管理端口）
+	// Admin 控制平面
 	Admin *admin.AdminServer
 
 	errCh chan error
@@ -204,9 +204,6 @@ func (g *Gateway) info() map[string]any {
 	}
 }
 
-// Start 让两个端口开始监听，并启动热加载消费。
-//
-// 非阻塞：监听失败会通过 Wait 返回，而不是在这里 panic。
 func (g *Gateway) Start() error {
 	if g.started {
 		return errors.New("gateway: 已启动")
@@ -216,8 +213,6 @@ func (g *Gateway) Start() error {
 	}
 	g.started = true
 	g.errCh = make(chan error, 2)
-
-	g.startWatchers()
 
 	go func() { g.errCh <- g.Data.Start() }()
 	go func() { g.errCh <- g.Admin.Start() }()
@@ -252,7 +247,6 @@ func (g *Gateway) Run(ctx context.Context) error {
 func (g *Gateway) Close() error {
 	g.closeOnce.Do(func() {
 		// 1. 关闭配置。
-		g.stopWatcher()
 		if g.cc != nil {
 			// 等轮询 goroutine 真正退出，避免它回调到已停的数据面。
 			_ = g.cc.Close()

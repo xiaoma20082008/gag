@@ -6,14 +6,14 @@ import (
 )
 
 // HookPoint 是请求生命周期中的回调点。
-//
-// 与 BFE 的 callback 点一一对应，只是去掉了连接级的 Accept/Handshake/Finish：
-// 连接生命周期在 http.Server 手里，网关拿不到这些时机。
 type HookPoint uint8
 
 const (
+	_ HookPoint = iota
+	// HookAfterAccept
+	HookAfterAccept
 	// HookBeforeRoute 请求已解析，尚未确定租户与路由。
-	HookBeforeRoute HookPoint = iota + 1
+	HookBeforeRoute
 	// HookFoundRoute 租户已确定，路由尚未匹配。
 	HookFoundRoute
 	// HookAfterRoute 路由与集群已确定，尚未转发。
@@ -45,15 +45,12 @@ func (p HookPoint) String() string {
 	return hookNames[p]
 }
 
-// Action 是 handler 的返回值，控制链的推进方式。
-//
-// 与 BFE 的返回码一致，但零值刻意取 ActionGoOn：漏写 return 时退化成
-// "继续执行"，而不是像 BFE 的 Finish=0 那样静默中断整条链。
 type Action uint8
 
 const (
+	_ Action = iota
 	// ActionGoOn 继续执行同回调点的下一个 handler。
-	ActionGoOn Action = iota
+	ActionGoOn
 	// ActionRespond c.Response 已就绪，跳过后续请求阶段。
 	ActionRespond
 	// ActionFinish 异常终止，由 HookReadResponse 依据 c.Error() 生成响应。
@@ -81,9 +78,6 @@ func (a Action) String() string {
 type Handler func(*RequestContext) Action
 
 // Module 是插件单元。
-//
-// 一个模块可以在多个回调点注册 handler（例如 CORS 同时挂在请求前与响应前），
-// 这是把"阶段"换成"回调点"后最直接的收益。
 type Module interface {
 	Name() string
 	Init(*Callbacks) error
@@ -110,9 +104,6 @@ func NewCallbacks() *Callbacks {
 }
 
 // Add 在指定回调点注册 handler。
-//
-// order 决定同回调点内的执行顺序（小的先执行）；模块注册顺序不影响执行顺序。
-// 同一「模块.handler」重复注册会 panic：装配期的错误不应该留到线上。
 func (c *Callbacks) Add(point HookPoint, order int, module, name string, h Handler) {
 	if h == nil {
 		panic(fmt.Sprintf("core: %s.%s 注册了 nil handler", module, name))

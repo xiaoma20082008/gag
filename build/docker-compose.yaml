@@ -1,18 +1,6 @@
-# 本地依赖编排：注册中心 + 存储。
-#
-# 网关本体默认不在 compose 里跑，用 `go run ./cmd/main` 直接跑在宿主机上：
-# configs/gateway.yaml 里的静态实例写的是 127.0.0.1:9001/9002，
-# 容器内的 127.0.0.1 指向容器自己，把网关塞进容器后这些地址会全部打空。
-# 要容器化网关，把下面的 gag 服务放开，并把 discovery 换成 nacos
-# （服务名用 nacos，端口 8848），实例地址改用 compose 服务名。
-#
-#   docker compose -f build/docker-compose.yaml up -d
-
 name: gag
 
 services:
-  # Nacos 2.x：discovery.type=nacos 时的注册中心。
-  # 单机模式 + 内嵌 derby，只用于本地开发，不要照搬到生产。
   nacos:
     image: nacos/nacos-server:v2.4.3
     container_name: gag-nacos

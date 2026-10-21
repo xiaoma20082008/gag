@@ -28,19 +28,11 @@ type State struct {
 }
 
 // NewState 由快照构建运行时视图。
-//
-// prev 非空时，哈希一致的路由会复用旧 middleware.Set：
-// 限流令牌桶与熔断计数因此得以跨配置发布延续，
-// 避免每次发布都把在途流量当成新一轮冷启动。
 func NewState(snap *config.Snapshot, prev *State) (*State, error) {
 	if snap == nil || snap.Config() == nil {
 		return nil, errors.New("server: snapshot 为 nil")
 	}
 
-	// 实例来源由配置的 discovery 段决定：静态场景用配置写死的清单，
-	// nacos 走注册中心查询（客户端按连接参数进程内复用，不会随发布重建）。
-	// 连接参数不合法时在这里失败——宁可拒绝发布，也不要静默跑在一个
-	// 永远没有实例的网关上，那只会让所有请求先超时才 503。
 	src, err := discovery.NewDiscoveryClient(snap.Config().Server.Discovery)
 	if err != nil {
 		return nil, fmt.Errorf("server: 实例来源: %w", err)

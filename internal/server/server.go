@@ -1,12 +1,3 @@
-// Package server 实现数据平面（Gag Server）：业务流量经治理链转发到下游。
-//
-// 与 internal/admin（Gag Admin：控制面接口 + 运维端点）一一对应：
-// 两个服务各自持有独立的 http.Server，分别监听业务端口与管理端口。
-//
-// 业务端口不用任何 Web 框架，直接基于标准库 net.Conn：
-// 监听器由 net.Listen 提供，http.Server 从它上面 accept 原生连接，
-// 请求进入后立刻交给 gateway pipeline。路由、认证、限流、转发都不经过框架，
-// 避免框架的 404/405/301 语义与网关治理链打架。
 package server
 
 import (
